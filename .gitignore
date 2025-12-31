@@ -128,3 +128,5 @@ frentend/.venv/
 frentend/.python-version
 frentend/package-lock.json
 cursor_frontend_requirements_for_backen.md
+manage_solr9/
+.cursor/
