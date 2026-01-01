@@ -2,7 +2,7 @@
 
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Tuple
 from ..config import settings
 from ..models.document import (
@@ -22,6 +22,17 @@ class DocumentService:
     
     def __init__(self, solr_service: SolrService = None):
         self.solr = solr_service or get_solr_service()
+    
+    def _format_date_for_solr(self, dt: Optional[datetime]) -> Optional[str]:
+        """Format datetime for Solr (ISO 8601 with Z suffix)."""
+        if dt is None:
+            return None
+        # Convert to UTC if timezone-aware, otherwise assume UTC
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc)
+        else:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.strftime('%Y-%m-%dT%H:%M:%SZ')
     
     def _build_filters(self, filters: Optional[FilterParams]) -> List[str]:
         """Build Solr filter queries from FilterParams."""
@@ -197,8 +208,8 @@ class DocumentService:
             "authorityLevelRationale": doc.authority_level_rationale,
             
             # Temporal
-            "effectiveFrom": doc.effective_from.isoformat() if doc.effective_from else None,
-            "effectiveTo": doc.effective_to.isoformat() if doc.effective_to else None,
+            "effectiveFrom": self._format_date_for_solr(doc.effective_from),
+            "effectiveTo": self._format_date_for_solr(doc.effective_to),
             "appliesToTaxYears": doc.applies_to_tax_years,
             "appliesToJurisdictions": doc.applies_to_jurisdictions,
             
@@ -303,8 +314,8 @@ class DocumentService:
         for py_field, solr_field in field_mapping.items():
             if py_field in update_data and update_data[py_field] is not None:
                 value = update_data[py_field]
-                if hasattr(value, "isoformat"):
-                    value = value.isoformat()
+                if isinstance(value, datetime):
+                    value = self._format_date_for_solr(value)
                 update_dict[solr_field] = value
         
         # Update timestamp
