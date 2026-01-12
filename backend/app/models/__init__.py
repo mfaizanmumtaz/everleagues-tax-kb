@@ -15,6 +15,7 @@ from .search import (
     SourceDocument,
     SearchResponse,
 )
+from .upload import FileUploadMetadata, FileUploadResponse
 
 __all__ = [
     # Common
@@ -38,5 +39,8 @@ __all__ = [
     "RetrievedChunk",
     "SourceDocument",
     "SearchResponse",
+    # Upload
+    "FileUploadMetadata",
+    "FileUploadResponse",
 ]
 

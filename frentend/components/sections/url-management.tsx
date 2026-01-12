@@ -24,8 +24,9 @@ import {
 interface URL {
   id: string
   url: string
-  category: "State" | "Federal"
+  category: "State" | "Federal" | "Local"
   state?: string
+  city?: string
   active: boolean
   lastUpdated: string
   dataSource: "scrape" | "api" | "file"
@@ -153,8 +154,9 @@ const SCHEDULE_FREQUENCIES = [
 export default function URLManagement() {
   const [urls, setURLs] = useState<URL[]>(initialURLs)
   const [newURL, setNewURL] = useState("")
-  const [newCategory, setNewCategory] = useState<"State" | "Federal">("Federal")
+  const [newCategory, setNewCategory] = useState<"State" | "Federal" | "Local">("Federal")
   const [newState, setNewState] = useState("")
+  const [newCity, setNewCity] = useState("")
   const [dataSource, setDataSource] = useState<"scrape" | "api" | "file">("scrape")
   const [apiKey, setApiKey] = useState("")
   const [apiEndpoint, setApiEndpoint] = useState("")
@@ -254,6 +256,10 @@ export default function URLManagement() {
       setValidationStatus("invalid")
       return
     }
+    if (newCategory === "Local" && (!newState || !newCity)) {
+      setValidationStatus("invalid")
+      return
+    }
     if (dataSource === "api" && (!apiKey || !apiEndpoint)) {
       setValidationStatus("invalid")
       return
@@ -269,7 +275,8 @@ export default function URLManagement() {
         id: String(Date.now()),
         url: dataSource === "file" ? uploadedFile?.name || "File Upload" : newURL,
         category: newCategory,
-        state: newCategory === "State" ? newState : undefined,
+        state: (newCategory === "State" || newCategory === "Local") ? newState : undefined,
+        city: newCategory === "Local" ? newCity : undefined,
         active: true,
         lastUpdated: "now",
         dataSource,
@@ -286,6 +293,7 @@ export default function URLManagement() {
       setURLs([url, ...urls])
       setNewURL("")
       setNewState("")
+      setNewCity("")
       setDataSource("scrape")
       setApiKey("")
       setApiEndpoint("")
@@ -432,6 +440,7 @@ export default function URLManagement() {
       url.url.toLowerCase().includes(searchQuery.toLowerCase()) ||
       url.category.toLowerCase().includes(searchQuery.toLowerCase()) ||
       url.state?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      url.city?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       url.dataSource.toLowerCase().includes(searchQuery.toLowerCase())
     const matchesDuplicateFilter = !showDuplicatesOnly || duplicateIds.has(url.id)
     return matchesSearch && matchesDuplicateFilter
@@ -496,6 +505,7 @@ export default function URLManagement() {
                   <div className="flex items-center gap-2 text-destructive text-sm mt-2">
                     <AlertCircle size={16} /> Invalid URL format
                     {newCategory === "State" && !newState ? " or state not selected" : ""}
+                    {newCategory === "Local" && (!newState || !newCity) ? " or state/city not selected" : ""}
                     {dataSource === "api" && (!apiKey || !apiEndpoint) ? " or API configuration incomplete" : ""}
                   </div>
                 )}
@@ -830,6 +840,7 @@ export default function URLManagement() {
                         onClick={() => {
                           setNewCategory("Federal")
                           setNewState("")
+                          setNewCity("")
                           setCategoryDropdownOpen(false)
                         }}
                         className="px-4 py-2.5 hover:bg-muted/50 cursor-pointer transition-colors flex items-center justify-between text-sm"
@@ -840,12 +851,23 @@ export default function URLManagement() {
                       <div
                         onClick={() => {
                           setNewCategory("State")
+                          setNewCity("")
                           setCategoryDropdownOpen(false)
                         }}
                         className="px-4 py-2.5 hover:bg-muted/50 cursor-pointer transition-colors flex items-center justify-between border-t border-border text-sm"
                       >
                         <span className="text-foreground">State</span>
                         {newCategory === "State" && <Check size={16} className="text-accent" />}
+                      </div>
+                      <div
+                        onClick={() => {
+                          setNewCategory("Local")
+                          setCategoryDropdownOpen(false)
+                        }}
+                        className="px-4 py-2.5 hover:bg-muted/50 cursor-pointer transition-colors flex items-center justify-between border-t border-border text-sm"
+                      >
+                        <span className="text-foreground">Local</span>
+                        {newCategory === "Local" && <Check size={16} className="text-accent" />}
                       </div>
                     </div>
                   )}
@@ -857,21 +879,21 @@ export default function URLManagement() {
                 <div ref={stateDropdownRef} className="relative">
                   <button
                     type="button"
-                    onClick={() => newCategory === "State" && setStateDropdownOpen(!stateDropdownOpen)}
-                    disabled={newCategory !== "State"}
+                    onClick={() => (newCategory === "State" || newCategory === "Local") && setStateDropdownOpen(!stateDropdownOpen)}
+                    disabled={newCategory === "Federal"}
                     className={`w-full px-4 py-2.5 rounded-lg bg-input border border-border text-foreground focus:outline-none focus:ring-2 focus:ring-accent flex items-center justify-between transition-colors ${
-                      newCategory === "State" ? "hover:bg-muted/50 cursor-pointer" : "opacity-50 cursor-not-allowed"
+                      newCategory !== "Federal" ? "hover:bg-muted/50 cursor-pointer" : "opacity-50 cursor-not-allowed"
                     }`}
                   >
                     <span className={`text-sm ${newState ? "text-foreground" : "text-muted-foreground"}`}>
-                      {newCategory !== "State" ? "Select State first" : newState || "Choose a state"}
+                      {newCategory === "Federal" ? "Select State or Local first" : newState || "Choose a state"}
                     </span>
                     <ChevronDown
                       size={16}
                       className={`text-muted-foreground transition-transform ${stateDropdownOpen ? "rotate-180" : ""}`}
                     />
                   </button>
-                  {stateDropdownOpen && newCategory === "State" && (
+                  {stateDropdownOpen && newCategory !== "Federal" && (
                     <div className="absolute z-[100] w-full mt-1 bg-card border border-accent/50 rounded-xl shadow-2xl overflow-hidden animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-200">
                       <div className="p-2.5 border-b border-border/50 bg-muted/30">
                         <div className="relative">
@@ -919,6 +941,19 @@ export default function URLManagement() {
                   )}
                 </div>
               </div>
+
+              {newCategory === "Local" && (
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-2">City Name</label>
+                  <input
+                    type="text"
+                    value={newCity}
+                    onChange={(e) => setNewCity(e.target.value)}
+                    placeholder="Enter city name (e.g., New York City, Los Angeles)"
+                    className="w-full px-4 py-2.5 rounded-lg bg-input border border-border text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent text-sm"
+                  />
+                </div>
+              )}
             </div>
 
             <div className="flex gap-3 pt-2">
@@ -940,6 +975,7 @@ export default function URLManagement() {
                   setNewURL("")
                   setNewCategory("Federal")
                   setNewState("")
+                  setNewCity("")
                   setDataSource("scrape")
                   setApiKey("")
                   setApiEndpoint("")
@@ -1094,13 +1130,17 @@ export default function URLManagement() {
                   <td className="px-6 py-4 text-sm">
                     <span
                       className={`px-2 py-1.5 rounded-full text-xs font-semibold ${
-                        url.category === "State" ? "bg-primary/20 text-primary" : "bg-muted text-muted-foreground"
+                        url.category === "State" ? "bg-primary/20 text-primary" : 
+                        url.category === "Local" ? "bg-amber-500/20 text-amber-600" : 
+                        "bg-muted text-muted-foreground"
                       }`}
                     >
                       {url.category}
                     </span>
                   </td>
-                  <td className="px-6 py-4 text-sm text-foreground">{url.state || "-"}</td>
+                  <td className="px-6 py-4 text-sm text-foreground">
+                    {url.category === "Local" && url.city ? `${url.city}, ${url.state}` : url.state || "-"}
+                  </td>
                   <td className="px-6 py-4">
                     <div 
                       ref={statusDropdownOpen === url.id ? statusDropdownRef : null}
@@ -1283,8 +1323,14 @@ export default function URLManagement() {
                   <p className="text-foreground text-sm mt-1">{viewingURL.category}</p>
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">State</label>
-                  <p className="text-foreground text-sm mt-1">{viewingURL.state || "N/A"}</p>
+                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                    {viewingURL.category === "Local" ? "State / City" : "State"}
+                  </label>
+                  <p className="text-foreground text-sm mt-1">
+                    {viewingURL.category === "Local" && viewingURL.city 
+                      ? `${viewingURL.state} / ${viewingURL.city}` 
+                      : viewingURL.state || "N/A"}
+                  </p>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">

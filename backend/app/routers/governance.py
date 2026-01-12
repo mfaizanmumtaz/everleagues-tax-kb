@@ -1,12 +1,16 @@
 """Governance API routes."""
 
-from fastapi import APIRouter, HTTPException, Query, Path
+from fastapi import APIRouter, HTTPException, Query, Path, Depends
 from typing import Optional, List
 from datetime import datetime
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+
 from ..models.common import GovernanceState
 from ..services.document_service import get_document_service
 from ..services.solr_service import get_solr_service
+from ..services.audit_log_service import AuditLogService
+from ..database.connection import get_db
 
 router = APIRouter(prefix="/governance", tags=["Governance"])
 
@@ -120,7 +124,10 @@ async def get_governance_logs(
 
 
 @router.post("/logs", response_model=GovernanceLogEntry, status_code=201)
-async def create_governance_log(entry: GovernanceLogCreate):
+async def create_governance_log(
+    entry: GovernanceLogCreate,
+    db: Session = Depends(get_db),
+):
     """
     Create a governance log entry by updating a document's governance state.
     
@@ -130,11 +137,15 @@ async def create_governance_log(entry: GovernanceLogCreate):
         from ..models.document import GovernanceStateUpdate
         
         document_service = get_document_service()
+        audit_service = AuditLogService(db)
         
         # Check if document exists
         doc = document_service.get_document(entry.document_id)
         if not doc:
             raise HTTPException(status_code=404, detail="Document not found")
+        
+        # Store previous state for audit log
+        previous_state = doc.governance_state.value if hasattr(doc.governance_state, 'value') else str(doc.governance_state)
         
         # Update governance state
         update = GovernanceStateUpdate(
@@ -144,6 +155,16 @@ async def create_governance_log(entry: GovernanceLogCreate):
         )
         
         updated_doc = document_service.update_governance_state(entry.document_id, update)
+        
+        # Log to PostgreSQL audit log
+        audit_service.log_governance_change(
+            document_id=entry.document_id,
+            document_name=updated_doc.name,
+            from_state=previous_state,
+            to_state=entry.to_state.value,
+            actor=entry.changed_by,
+            reason=entry.reason,
+        )
         
         # Return the new log entry
         if updated_doc.governance_history:
@@ -164,7 +185,7 @@ async def create_governance_log(entry: GovernanceLogCreate):
             id=f"{entry.document_id}_{datetime.utcnow().isoformat()}",
             document_id=entry.document_id,
             document_name=updated_doc.name,
-            from_state=doc.governance_state.value if hasattr(doc.governance_state, 'value') else str(doc.governance_state),
+            from_state=previous_state,
             to_state=entry.to_state.value,
             changed_by=entry.changed_by,
             reason=entry.reason,

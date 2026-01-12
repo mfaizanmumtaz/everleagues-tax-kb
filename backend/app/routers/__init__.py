@@ -1,5 +1,4 @@
 # API Routers
-from . import search, documents, chunks, dashboard, governance, urls
+from . import search, documents, dashboard, governance, urls, audit, upload
 
-__all__ = ["search", "documents", "chunks", "dashboard", "governance", "urls"]
-
+__all__ = ["search", "documents", "dashboard", "governance", "urls", "audit", "upload"]

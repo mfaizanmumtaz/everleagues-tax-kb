@@ -15,6 +15,8 @@ from ..models.document import (
 )
 from ..models.common import FilterParams, GovernanceState
 from .solr_service import get_solr_service, SolrService
+from .text_chunker import get_text_chunker
+from .chunk_service import get_chunk_service
 
 
 class DocumentService:
@@ -382,6 +384,130 @@ class DocumentService:
         """Get all chunks for a document."""
         start = (page - 1) * limit
         return self.solr.get_chunks_by_document(doc_id, start=start, rows=limit)
+    
+    def process_and_chunk_document(
+        self,
+        doc_id: str,
+        text: str,
+        chunk_size: Optional[int] = None,
+        chunk_overlap: Optional[int] = None,
+        generate_embeddings: bool = True
+    ) -> Tuple[int, List[str]]:
+        """
+        Process a document's text content and create chunks.
+        
+        This method:
+        1. Splits the document text into chunks using LangChain text splitter
+        2. Creates chunks in Solr with embeddings
+        3. Updates document metadata (chunk_count, index_status)
+        
+        Args:
+            doc_id: Document ID to process
+            text: Full document text content
+            chunk_size: Optional custom chunk size in tokens
+            chunk_overlap: Optional custom chunk overlap in tokens
+            generate_embeddings: Whether to generate embeddings for chunks
+        
+        Returns:
+            Tuple of (chunks_created, error_messages)
+        """
+        # Get document
+        document = self.get_document(doc_id)
+        if not document:
+            return 0, [f"Document {doc_id} not found"]
+        
+        # Delete existing chunks if any
+        self.solr.delete_chunks_by_document(doc_id)
+        
+        # Get text chunker and chunk service
+        chunker = get_text_chunker()
+        chunk_service = get_chunk_service()
+        
+        errors = []
+        chunks_created = 0
+        
+        try:
+            # Split text into chunks
+            chunks = chunker.chunk_document(
+                document=document,
+                text=text,
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+            )
+            
+            if not chunks:
+                errors.append("No chunks created from document text")
+                # Update document status
+                self.solr.update_document(doc_id, {
+                    "indexStatus": "index_failed",
+                    "indexError": "No chunks created from document text",
+                    "chunkCount": 0,
+                })
+                return 0, errors
+            
+            # Create chunks in bulk with embeddings
+            from ..models.chunk import BulkChunkCreate
+            bulk_request = BulkChunkCreate(
+                chunks=chunks,
+                generate_embeddings=generate_embeddings
+            )
+            
+            result = chunk_service.create_chunks_bulk(bulk_request)
+            chunks_created = result.created
+            
+            if result.failed > 0:
+                errors.extend(result.errors)
+            
+            # Calculate total tokens
+            total_tokens = sum(len(chunk.content.split()) for chunk in chunks)
+            
+            # Update document with chunk metadata
+            now = datetime.utcnow().isoformat() + "Z"
+            update_dict = {
+                "chunkCount": chunks_created,
+                "tokensIndexed": total_tokens,
+                "indexStatus": "indexed" if chunks_created > 0 else "index_failed",
+                "lastIndexedAt": now,
+                "embeddingModel": settings.embedding_model if generate_embeddings else None,
+            }
+            
+            if errors:
+                update_dict["indexError"] = "; ".join(errors[:3])  # Limit error message length
+            
+            self.solr.update_document(doc_id, update_dict)
+            
+            # Update ingestion history
+            existing = self.solr.get_document(doc_id)
+            if existing:
+                ingestion_history = []
+                if existing.get("ingestionHistory"):
+                    try:
+                        ingestion_history = json.loads(existing["ingestionHistory"])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                
+                ingestion_history.append({
+                    "timestamp": now,
+                    "event": "indexed",
+                    "details": f"{chunks_created} chunks created, {total_tokens} tokens indexed"
+                })
+                
+                self.solr.update_document(doc_id, {
+                    "ingestionHistory": json.dumps(ingestion_history)
+                })
+            
+        except Exception as e:
+            error_msg = f"Error processing document: {str(e)}"
+            errors.append(error_msg)
+            
+            # Update document with error status
+            self.solr.update_document(doc_id, {
+                "indexStatus": "index_failed",
+                "indexError": error_msg,
+                "chunkCount": 0,
+            })
+        
+        return chunks_created, errors
 
 
 # Singleton instance
