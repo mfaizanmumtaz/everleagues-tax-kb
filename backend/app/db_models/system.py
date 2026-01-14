@@ -10,7 +10,7 @@ class SystemSetting(Base):
     """System-wide configuration settings."""
     
     __tablename__ = "system_settings"
-    
+     
     # Primary key is the setting key
     key = Column(String(100), primary_key=True)
     

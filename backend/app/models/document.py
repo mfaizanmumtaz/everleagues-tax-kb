@@ -55,6 +55,7 @@ class DocumentBase(BaseModel):
     effective_to: Optional[datetime] = Field(default=None, description="Effective end date")
     applies_to_tax_years: List[int] = Field(default_factory=list, description="Applicable tax years")
     applies_to_jurisdictions: List[str] = Field(default_factory=list, description="Applicable jurisdictions")
+    form_family: Optional[str] = Field(default=None, description="Form family (e.g., 1040, SchC)")
 
 
 class DocumentCreate(DocumentBase):
@@ -82,6 +83,7 @@ class DocumentUpdate(BaseModel):
     effective_to: Optional[datetime] = None
     applies_to_tax_years: Optional[List[int]] = None
     applies_to_jurisdictions: Optional[List[str]] = None
+    form_family: Optional[str] = None
     superseded_by: Optional[str] = None
 
 

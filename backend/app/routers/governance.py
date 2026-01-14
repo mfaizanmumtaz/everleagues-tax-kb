@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Query, Path, Depends
 from typing import Optional, List
 from datetime import datetime
 from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.common import GovernanceState
 from ..services.document_service import get_document_service
@@ -126,7 +126,7 @@ async def get_governance_logs(
 @router.post("/logs", response_model=GovernanceLogEntry, status_code=201)
 async def create_governance_log(
     entry: GovernanceLogCreate,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Create a governance log entry by updating a document's governance state.
@@ -138,26 +138,26 @@ async def create_governance_log(
         
         document_service = get_document_service()
         audit_service = AuditLogService(db)
-        
+
         # Check if document exists
-        doc = document_service.get_document(entry.document_id)
+        doc = await document_service.get_document(entry.document_id)
         if not doc:
             raise HTTPException(status_code=404, detail="Document not found")
-        
+
         # Store previous state for audit log
         previous_state = doc.governance_state.value if hasattr(doc.governance_state, 'value') else str(doc.governance_state)
-        
+
         # Update governance state
         update = GovernanceStateUpdate(
             governance_state=entry.to_state,
             changed_by=entry.changed_by,
             reason=entry.reason,
         )
-        
-        updated_doc = document_service.update_governance_state(entry.document_id, update)
-        
+
+        updated_doc = await document_service.update_governance_state(entry.document_id, update)
+
         # Log to PostgreSQL audit log
-        audit_service.log_governance_change(
+        await audit_service.log_governance_change(
             document_id=entry.document_id,
             document_name=updated_doc.name,
             from_state=previous_state,
@@ -208,8 +208,8 @@ async def get_document_governance_logs(
     """
     try:
         document_service = get_document_service()
-        
-        doc = document_service.get_document(document_id)
+
+        doc = await document_service.get_document(document_id)
         if not doc:
             raise HTTPException(status_code=404, detail="Document not found")
         

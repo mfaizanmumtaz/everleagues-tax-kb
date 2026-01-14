@@ -112,6 +112,7 @@ class DocumentService:
             tags=doc.get("tags", []),
             category=doc.get("category"),
             doc_type=doc.get("docType"),
+            form_family=doc.get("formFamily"),
             size=doc.get("size"),
             knowledge_base_id=doc.get("knowledgeBaseId", "default"),
             
@@ -197,6 +198,7 @@ class DocumentService:
             "tags": doc.tags,
             "category": doc.category,
             "docType": doc.doc_type,
+            "formFamily": doc.form_family,
             "size": doc.size,
             "knowledgeBaseId": doc.knowledge_base_id,
             
@@ -299,6 +301,7 @@ class DocumentService:
             "tags": "tags",
             "category": "category",
             "doc_type": "docType",
+            "form_family": "formFamily",
             "tax_year": "taxYear",
             "tax_type": "taxType",
             "jurisdiction": "jurisdiction",

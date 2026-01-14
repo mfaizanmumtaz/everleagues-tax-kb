@@ -3,8 +3,8 @@
 from datetime import datetime
 from typing import Optional, List, Tuple
 from uuid import UUID
-from sqlalchemy.orm import Session
-from sqlalchemy import or_, func
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, func, or_
 
 from ..db_models.scrape_url import (
     ScrapeUrl,
@@ -17,12 +17,12 @@ from ..db_models.scrape_url import (
 
 class UrlDbService:
     """Service for URL management using PostgreSQL."""
-    
-    def __init__(self, db: Session):
+
+    def __init__(self, db: AsyncSession):
         """Initialize with database session."""
         self.db = db
     
-    def create_url(
+    async def create_url(
         self,
         url: str,
         category: str = "Federal",
@@ -85,8 +85,8 @@ class UrlDbService:
         )
         
         self.db.add(scrape_url)
-        self.db.flush()  # Get the ID
-        
+        await self.db.flush()  # Get the ID
+
         # Create API credential if needed
         if data_source == DataSourceType.API and api_endpoint:
             credential = ApiCredential(
@@ -95,21 +95,25 @@ class UrlDbService:
                 api_key_encrypted=api_key.encode() if api_key else None,  # In production, encrypt this
             )
             self.db.add(credential)
-        
-        self.db.commit()
-        self.db.refresh(scrape_url)
-        
+
+        await self.db.commit()
+        await self.db.refresh(scrape_url)
+
         return scrape_url
     
-    def get_url(self, url_id: UUID) -> Optional[ScrapeUrl]:
+    async def get_url(self, url_id: UUID) -> Optional[ScrapeUrl]:
         """Get a URL by ID."""
-        return self.db.query(ScrapeUrl).filter(ScrapeUrl.id == url_id).first()
+        stmt = select(ScrapeUrl).where(ScrapeUrl.id == url_id)
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
     
-    def get_url_by_url(self, url: str) -> Optional[ScrapeUrl]:
+    async def get_url_by_url(self, url: str) -> Optional[ScrapeUrl]:
         """Get a URL by its URL string."""
-        return self.db.query(ScrapeUrl).filter(ScrapeUrl.url == url).first()
+        stmt = select(ScrapeUrl).where(ScrapeUrl.url == url)
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
     
-    def list_urls(
+    async def list_urls(
         self,
         category: Optional[str] = None,
         state: Optional[str] = None,
@@ -121,59 +125,68 @@ class UrlDbService:
     ) -> Tuple[List[ScrapeUrl], int]:
         """
         List URLs with filters and pagination.
-        
+
         Returns:
             Tuple of (urls list, total count)
         """
-        query = self.db.query(ScrapeUrl)
-        
-        # Apply filters
+        # Build conditions list
+        conditions = []
+
         if category:
-            query = query.filter(ScrapeUrl.category == category)
+            conditions.append(ScrapeUrl.category == category)
         if state:
-            query = query.filter(ScrapeUrl.state == state)
+            conditions.append(ScrapeUrl.state == state)
         if status:
-            query = query.filter(ScrapeUrl.status == status)
+            conditions.append(ScrapeUrl.status == status)
         if data_source:
-            query = query.filter(ScrapeUrl.data_source == data_source)
+            conditions.append(ScrapeUrl.data_source == data_source)
         if search:
             search_term = f"%{search}%"
-            query = query.filter(
+            conditions.append(
                 or_(
                     ScrapeUrl.url.ilike(search_term),
                     ScrapeUrl.name.ilike(search_term),
                     ScrapeUrl.description.ilike(search_term),
                 )
             )
-        
+
         # Get total count
-        total = query.count()
-        
-        # Apply pagination
+        count_stmt = select(func.count()).select_from(ScrapeUrl)
+        if conditions:
+            count_stmt = count_stmt.where(*conditions)
+        count_result = await self.db.execute(count_stmt)
+        total = count_result.scalar()
+
+        # Get data with pagination
         offset = (page - 1) * limit
-        urls = query.order_by(ScrapeUrl.created_at.desc()).offset(offset).limit(limit).all()
-        
+        data_stmt = select(ScrapeUrl)
+        if conditions:
+            data_stmt = data_stmt.where(*conditions)
+        data_stmt = data_stmt.order_by(ScrapeUrl.created_at.desc()).offset(offset).limit(limit)
+        result = await self.db.execute(data_stmt)
+        urls = result.scalars().all()
+
         return urls, total
     
-    def update_url(
+    async def update_url(
         self,
         url_id: UUID,
         **kwargs
     ) -> Optional[ScrapeUrl]:
         """
         Update a URL entry.
-        
+
         Args:
             url_id: URL ID
             **kwargs: Fields to update
-        
+
         Returns:
             Updated ScrapeUrl object or None if not found
         """
-        scrape_url = self.get_url(url_id)
+        scrape_url = await self.get_url(url_id)
         if not scrape_url:
             return None
-        
+
         # Map field names
         field_mapping = {
             "url": "url",
@@ -190,11 +203,11 @@ class UrlDbService:
             "max_files_per_session": "max_files_per_session",
             "error_message": "error_message",
         }
-        
+
         for key, value in kwargs.items():
             if key in field_mapping and value is not None:
                 setattr(scrape_url, field_mapping[key], value)
-        
+
         # Update jurisdiction if category changed
         if "category" in kwargs and kwargs["category"]:
             category = kwargs["category"].lower()
@@ -204,36 +217,36 @@ class UrlDbService:
                 scrape_url.jurisdiction = "state"
             elif category == "local":
                 scrape_url.jurisdiction = "local"
-        
-        self.db.commit()
-        self.db.refresh(scrape_url)
-        
+
+        await self.db.commit()
+        await self.db.refresh(scrape_url)
+
         return scrape_url
     
-    def update_url_status(
+    async def update_url_status(
         self,
         url_id: UUID,
         status: UrlStatus,
         error_message: Optional[str] = None
     ) -> Optional[ScrapeUrl]:
         """Update URL status."""
-        scrape_url = self.get_url(url_id)
+        scrape_url = await self.get_url(url_id)
         if not scrape_url:
             return None
-        
+
         scrape_url.status = status
         if error_message is not None:
             scrape_url.error_message = error_message
-        
+
         if status == UrlStatus.ACTIVE and scrape_url.error_message:
             scrape_url.error_message = None
-        
-        self.db.commit()
-        self.db.refresh(scrape_url)
-        
+
+        await self.db.commit()
+        await self.db.refresh(scrape_url)
+
         return scrape_url
     
-    def update_scrape_stats(
+    async def update_scrape_stats(
         self,
         url_id: UUID,
         documents_count: Optional[int] = None,
@@ -241,70 +254,71 @@ class UrlDbService:
         last_successful_at: Optional[datetime] = None,
     ) -> Optional[ScrapeUrl]:
         """Update scraping statistics."""
-        scrape_url = self.get_url(url_id)
+        scrape_url = await self.get_url(url_id)
         if not scrape_url:
             return None
-        
+
         if documents_count is not None:
             scrape_url.documents_count = documents_count
         if last_scraped_at:
             scrape_url.last_scraped_at = last_scraped_at
         if last_successful_at:
             scrape_url.last_successful_at = last_successful_at
-        
-        self.db.commit()
-        self.db.refresh(scrape_url)
-        
+
+        await self.db.commit()
+        await self.db.refresh(scrape_url)
+
         return scrape_url
     
-    def increment_documents_count(self, url_id: UUID, count: int = 1) -> Optional[ScrapeUrl]:
+    async def increment_documents_count(self, url_id: UUID, count: int = 1) -> Optional[ScrapeUrl]:
         """Increment the documents count for a URL."""
-        scrape_url = self.get_url(url_id)
+        scrape_url = await self.get_url(url_id)
         if not scrape_url:
             return None
-        
+
         scrape_url.documents_count = (scrape_url.documents_count or 0) + count
-        self.db.commit()
-        self.db.refresh(scrape_url)
-        
+        await self.db.commit()
+        await self.db.refresh(scrape_url)
+
         return scrape_url
     
-    def delete_url(self, url_id: UUID) -> bool:
+    async def delete_url(self, url_id: UUID) -> bool:
         """
         Delete a URL entry.
-        
+
         Returns:
             True if deleted, False if not found
         """
-        scrape_url = self.get_url(url_id)
+        scrape_url = await self.get_url(url_id)
         if not scrape_url:
             return False
-        
-        self.db.delete(scrape_url)
-        self.db.commit()
-        
+
+        await self.db.delete(scrape_url)
+        await self.db.commit()
+
         return True
     
-    def get_urls_for_scheduling(
+    async def get_urls_for_scheduling(
         self,
         frequency: Optional[ScheduleFrequency] = None
     ) -> List[ScrapeUrl]:
         """Get URLs that need to be scheduled for scraping."""
-        query = self.db.query(ScrapeUrl).filter(
+        stmt = select(ScrapeUrl).where(
             ScrapeUrl.status == UrlStatus.ACTIVE,
             ScrapeUrl.schedule_frequency != ScheduleFrequency.ON_DEMAND,
         )
-        
+
         if frequency:
-            query = query.filter(ScrapeUrl.schedule_frequency == frequency)
-        
-        return query.all()
+            stmt = stmt.where(ScrapeUrl.schedule_frequency == frequency)
+
+        result = await self.db.execute(stmt)
+        return result.scalars().all()
     
-    def get_api_credential(self, url_id: UUID) -> Optional[ApiCredential]:
+    async def get_api_credential(self, url_id: UUID) -> Optional[ApiCredential]:
         """Get API credential for a URL."""
-        return self.db.query(ApiCredential).filter(
-            ApiCredential.scrape_url_id == url_id
-        ).first()
+        stmt = select(ApiCredential).where(ApiCredential.scrape_url_id == url_id)
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
     
     def to_dict(self, scrape_url: ScrapeUrl) -> dict:
         """Convert ScrapeUrl to dictionary for API response."""

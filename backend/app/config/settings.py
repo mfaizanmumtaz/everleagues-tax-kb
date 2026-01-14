@@ -117,4 +117,3 @@ def get_settings() -> Settings:
 
 # Convenience function for direct import
 settings = get_settings()
-

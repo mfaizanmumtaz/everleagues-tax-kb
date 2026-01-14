@@ -3,8 +3,10 @@
 import json
 import os
 from typing import Optional
-from fastapi import APIRouter, HTTPException, File, UploadFile, Form, Depends, BackgroundTasks
-from sqlalchemy.orm import Session
+from datetime import datetime
+from uuid import uuid4
+from fastapi import APIRouter, HTTPException, File, UploadFile, Form, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
 from ..models.upload import FileUploadMetadata, FileUploadResponse
@@ -13,7 +15,11 @@ from ..database.connection import get_db
 from ..services.blob_storage_service import get_blob_storage_service
 from ..services.file_parser import get_file_parser_service
 from ..services.document_service import get_document_service
+from ..services.document_classifier_service import get_document_classifier_service
 from ..services.audit_log_service import AuditLogService
+from ..services.uploaded_file_service import UploadedFileService
+from ..services.document_registry_service import DocumentRegistryService
+from ..db_models.scrape_url import ProcessingStatus
 
 router = APIRouter(prefix="/upload", tags=["File Upload"])
 
@@ -64,8 +70,7 @@ def _parse_metadata(metadata_str: Optional[str]) -> FileUploadMetadata:
 async def upload_file(
     file: UploadFile = File(..., description="File to upload"),
     metadata: str = Form(None, description="JSON string with document metadata"),
-    background_tasks: Optional[BackgroundTasks] = None,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Upload a file and process it through the ingestion pipeline.
@@ -131,14 +136,19 @@ async def upload_file(
                 detail="Azure Blob Storage is not configured"
             )
         
+        # Generate stored filename (UUID-based for uniqueness)
+        file_ext = os.path.splitext(file.filename)[1].lower()
+        stored_filename = f"{uuid4()}{file_ext}"
+        
         try:
             blob_path, blob_url, checksum, stored_size = blob_service.upload_file(
                 container=settings.azure_container_uploads,
                 file_data=file_content,
-                filename=file.filename,
+                filename=stored_filename,
                 folder=None,
                 metadata={
                     "upload_source": "api",
+                    "original_filename": file.filename,
                     "content_type": file.content_type or "application/octet-stream",
                 }
             )
@@ -148,7 +158,35 @@ async def upload_file(
                 detail=f"Failed to store file in blob storage: {str(e)}"
             )
         
-        # Step 4: Extract text using FileParserService
+        # Step 4: Create UploadedFile record in PostgreSQL with PENDING status
+        uploaded_file_service = UploadedFileService(db)
+        
+        try:
+            uploaded_file = await uploaded_file_service.create(
+                original_filename=file.filename,
+                stored_filename=stored_filename,
+                file_path=blob_path,
+                file_size=file_size,
+                mime_type=file.content_type,
+                checksum=checksum,
+                blob_container=settings.azure_container_uploads,
+                blob_path=blob_path,
+                blob_url=blob_url,
+            )
+            uploaded_file_id = str(uploaded_file.id)
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to create uploaded file record: {str(e)}"
+            )
+        
+        # Update status to PROCESSING
+        await uploaded_file_service.update_processing_status(
+            uploaded_file.id,
+            ProcessingStatus.PROCESSING
+        )
+        
+        # Step 5: Extract text using FileParserService
         parser_service = get_file_parser_service()
         
         try:
@@ -162,39 +200,124 @@ async def upload_file(
             parse_result = None
             extraction_error = str(e)
         
-        # Step 5: Create document record
+        # Step 6: AI Classification - Auto-extract metadata from document content
+        classification = None
+        if parse_result and parse_result.success and parse_result.text:
+            try:
+                classifier = get_document_classifier_service(use_ai=True)
+                classification = classifier.classify(
+                    text=parse_result.text,
+                    source_url=blob_url,
+                    filename=file.filename,
+                    existing_metadata={
+                        "title": upload_metadata.title,
+                        "description": upload_metadata.description,
+                        "doc_type": upload_metadata.doc_type,
+                        "authority_level": upload_metadata.authority_level,
+                        "tags": upload_metadata.tags if upload_metadata.tags else None,
+                        "tax_year": upload_metadata.tax_year,
+                        "form_family": upload_metadata.form_family,
+                    }
+                )
+            except Exception as e:
+                # Classification is optional - continue without it
+                classification = None
+        
+        # Step 7: Create document record in Solr
         doc_service = get_document_service()
         
-        # Build DocumentCreate from metadata and file info
+        # Auto-derive jurisdiction from category or AI classification
+        derived_jurisdiction = None
+        if upload_metadata.category:
+            category_lower = upload_metadata.category.lower()
+            if category_lower in ("federal", "state", "local"):
+                derived_jurisdiction = category_lower
+        elif classification and classification.jurisdiction:
+            derived_jurisdiction = classification.jurisdiction
+        
+        # Build DocumentCreate from metadata, AI classification, and file info
+        # Priority: User-provided metadata > AI classification > defaults
         doc_create = DocumentCreate(
             name=file.filename,
-            title=upload_metadata.title or file.filename,
-            description=upload_metadata.description,
+            title=upload_metadata.title or (classification.title if classification else None) or file.filename,
+            description=upload_metadata.description or (classification.description if classification else None),
             source_url=blob_url,
             source_domain=None,  # File uploads don't have a domain
-            tags=upload_metadata.tags,
+            tags=upload_metadata.tags if upload_metadata.tags else (classification.tags if classification else []),
             category=upload_metadata.category,
-            doc_type=upload_metadata.doc_type,
-            tax_year=upload_metadata.tax_year,
+            doc_type=upload_metadata.doc_type or (classification.doc_type if classification else None),
+            tax_year=upload_metadata.tax_year or (classification.tax_year if classification else None),
             tax_type=upload_metadata.tax_type,
-            jurisdiction=upload_metadata.jurisdiction,
+            jurisdiction=derived_jurisdiction,
             state=upload_metadata.state,
             city=upload_metadata.city,
-            authority_level=upload_metadata.authority_level,
-            authority_level_rationale=upload_metadata.authority_level_rationale,
+            authority_level=upload_metadata.authority_level or (classification.authority_level if classification else None),
+            authority_level_rationale=upload_metadata.authority_level_rationale or (classification.authority_level_rationale if classification else None),
             size=str(file_size),
             knowledge_base_id=upload_metadata.knowledge_base_id,
+            
+            # New fields
+            form_family=upload_metadata.form_family or (classification.form_family if classification else None),
+            effective_from=datetime.fromisoformat(upload_metadata.effective_from.replace('Z', '+00:00')) if upload_metadata.effective_from else None,
+            effective_to=datetime.fromisoformat(upload_metadata.effective_to.replace('Z', '+00:00')) if upload_metadata.effective_to else None,
+            applies_to_tax_years=upload_metadata.applies_to_tax_years,
+            applies_to_jurisdictions=upload_metadata.applies_to_jurisdictions,
         )
         
         try:
             document = doc_service.create_document(doc_create)
         except Exception as e:
+            # Mark uploaded file as failed
+            await uploaded_file_service.update_processing_status(
+                uploaded_file.id,
+                ProcessingStatus.FAILED,
+                error=f"Failed to create Solr document: {str(e)}"
+            )
             raise HTTPException(
                 status_code=500,
                 detail=f"Failed to create document record: {str(e)}"
             )
         
-        # Step 6: Process and chunk document if extraction succeeded
+        # Link uploaded file to Solr document
+        await uploaded_file_service.update_solr_reference(uploaded_file.id, document.id)
+        
+        # Step 7: Create DocumentRegistry entry in PostgreSQL
+        registry_service = DocumentRegistryService(db)
+        registry_id = None
+        
+        try:
+            registry = await registry_service.create(
+                solr_document_id=document.id,
+                document_name=file.filename,
+                title=upload_metadata.title or file.filename,
+                jurisdiction=upload_metadata.jurisdiction,
+                state=upload_metadata.state,
+                city=upload_metadata.city,
+                tax_year=upload_metadata.tax_year,
+                governance_state="pending",  # Initial governance state
+                doc_type=upload_metadata.doc_type,
+                category=upload_metadata.category,
+                source_url=blob_url,
+                uploaded_file_id=uploaded_file.id,
+            )
+            registry_id = str(registry.id)
+
+            # Create blob reference for the raw file
+            await registry_service.create_blob(
+                registry_id=registry.id,
+                blob_type="raw",
+                blob_container=settings.azure_container_uploads,
+                blob_path=blob_path,
+                blob_url=blob_url,
+                file_size=file_size,
+                mime_type=file.content_type,
+                content_hash=checksum,
+            )
+        except Exception as e:
+            # Don't fail the upload if registry creation fails - log and continue
+            registry_id = None
+        
+        # Step 8: Process and chunk document if extraction succeeded
         chunks_created = 0
         status = "uploaded"
         message = "File uploaded successfully"
@@ -207,13 +330,17 @@ async def upload_file(
                     text=parse_result.text,
                     generate_embeddings=True,
                 )
-                
+
                 if errors:
                     processing_errors.extend(errors)
-                
+
                 if chunks_created > 0:
                     status = "indexed"
                     message = f"File uploaded and indexed successfully. Created {chunks_created} chunks."
+
+                    # Update registry chunk count
+                    if registry_id:
+                        await registry_service.update_chunk_count(registry.id, chunks_created)
                 else:
                     status = "processing"
                     message = "File uploaded but chunking failed or produced no chunks."
@@ -232,10 +359,23 @@ async def upload_file(
             message = f"File uploaded but text extraction failed: {extraction_error}"
             processing_errors.append(extraction_error)
         
-        # Step 7: Log audit action
+        # Step 9: Update uploaded file processing status
+        if status == "indexed":
+            await uploaded_file_service.update_processing_status(
+                uploaded_file.id,
+                ProcessingStatus.COMPLETED
+            )
+        elif status == "failed":
+            await uploaded_file_service.update_processing_status(
+                uploaded_file.id,
+                ProcessingStatus.FAILED,
+                error="; ".join(processing_errors[:3]) if processing_errors else "Unknown error"
+            )
+        
+        # Step 10: Log audit action
         try:
             audit_service = AuditLogService(db)
-            audit_service.log_action(
+            await audit_service.log_action(
                 action="document.upload",
                 resource_type="document",
                 resource_id=document.id,
@@ -248,6 +388,8 @@ async def upload_file(
                     "chunks_created": chunks_created,
                     "word_count": parse_result.word_count if parse_result else 0,
                     "status": status,
+                    "uploaded_file_id": uploaded_file_id,
+                    "registry_id": registry_id,
                 },
                 details=f"File uploaded via API. Status: {status}. Chunks: {chunks_created}",
             )
@@ -255,7 +397,7 @@ async def upload_file(
             # Don't fail the upload if audit logging fails
             pass
         
-        # Step 8: Refresh document to get latest status
+        # Step 11: Refresh document to get latest status
         try:
             document = doc_service.get_document(document.id)
         except Exception:
@@ -264,6 +406,8 @@ async def upload_file(
         # Build response
         response = FileUploadResponse(
             document_id=document.id,
+            uploaded_file_id=uploaded_file_id,
+            registry_id=registry_id,
             filename=file.filename,
             file_size=file_size,
             blob_path=blob_path,

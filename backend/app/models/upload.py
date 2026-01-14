@@ -1,18 +1,29 @@
 """Pydantic models for file upload operations."""
 
 from typing import Optional, List
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from .document import DocumentResponse
+from ..config.jurisdiction_config import (
+    get_valid_states,
+    get_valid_categories,
+    get_valid_doc_types,
+    is_valid_state,
+)
 
 
 class FileUploadMetadata(BaseModel):
-    """Metadata for file upload (parsed from JSON form data)."""
+    """Metadata for file upload (parsed from JSON form data).
     
-    category: Optional[str] = Field(default=None, description="Document category")
-    state: Optional[str] = Field(default=None, description="State code")
+    Note: jurisdiction is auto-derived from category by the backend.
+    - category: "Federal" -> jurisdiction: "federal"
+    - category: "State" -> jurisdiction: "state"  
+    - category: "Local" -> jurisdiction: "local"
+    """
+    
+    category: Optional[str] = Field(default=None, description="Document category (Federal/State/Local)")
+    state: Optional[str] = Field(default=None, description="State code (e.g., CA, NY)")
     city: Optional[str] = Field(default=None, description="City name")
     tax_year: Optional[int] = Field(default=None, description="Applicable tax year")
-    jurisdiction: Optional[str] = Field(default=None, description="Jurisdiction level")
     tax_type: Optional[str] = Field(default=None, description="Tax type")
     authority_level: Optional[int] = Field(default=None, ge=1, le=6, description="Authority level (1-6)")
     authority_level_rationale: Optional[str] = Field(default=None, description="Rationale for authority level")
@@ -22,22 +33,67 @@ class FileUploadMetadata(BaseModel):
     description: Optional[str] = Field(default=None, description="Document description")
     doc_type: Optional[str] = Field(default=None, description="Document type")
     
+    effective_from: Optional[str] = Field(default=None, description="Effective start date (ISO 8601)")
+    effective_to: Optional[str] = Field(default=None, description="Effective end date (ISO 8601)")
+    applies_to_tax_years: List[int] = Field(default_factory=list, description="List of applicable tax years")
+    applies_to_jurisdictions: List[str] = Field(default_factory=list, description="List of applicable jurisdictions")
+    form_family: Optional[str] = Field(default=None, description="Form family identifier (e.g. 1040, SchC)")
+    
     class Config:
         json_schema_extra = {
             "example": {
                 "category": "State",
                 "state": "CA",
                 "tax_year": 2024,
-                "jurisdiction": "State",
-                "tags": ["sales-tax", "california"]
+                "tags": ["sales-tax", "california"],
+                "doc_type": "form"
             }
         }
+
+    @field_validator('category')
+    @classmethod
+    def validate_category(cls, v):
+        if v:
+            valid_categories = get_valid_categories()
+            if v not in valid_categories:
+                raise ValueError(f'Category must be one of: {", ".join(valid_categories)}')
+        return v
+
+    @field_validator('state')
+    @classmethod
+    def validate_state(cls, v):
+        if v:
+            v = v.upper()
+            if not is_valid_state(v):
+                valid_states = get_valid_states()
+                raise ValueError(f'Invalid state code "{v}". Valid codes: {", ".join(sorted(valid_states))}')
+            return v
+        return v
+
+    @field_validator('tax_year')
+    @classmethod
+    def validate_tax_year(cls, v):
+        if v and (v < 1900 or v > 2100):
+            raise ValueError('Tax year must be between 1900 and 2100')
+        return v
+
+    @field_validator('doc_type')
+    @classmethod
+    def validate_doc_type(cls, v):
+        if v:
+            valid_types = get_valid_doc_types()
+            if v.lower() not in valid_types:
+                raise ValueError(f'Document type must be one of: {", ".join(valid_types)}')
+            return v.lower()
+        return v
 
 
 class FileUploadResponse(BaseModel):
     """Response after successful file upload and processing."""
     
     document_id: str = Field(..., description="Created document ID")
+    uploaded_file_id: str = Field(..., description="PostgreSQL uploaded file record ID")
+    registry_id: Optional[str] = Field(default=None, description="Document registry ID if created")
     filename: str = Field(..., description="Original filename")
     file_size: int = Field(..., description="File size in bytes")
     blob_path: str = Field(..., description="Path to file in blob storage")
@@ -55,6 +111,8 @@ class FileUploadResponse(BaseModel):
         json_schema_extra = {
             "example": {
                 "document_id": "uuid-here",
+                "uploaded_file_id": "uuid-here",
+                "registry_id": "uuid-here",
                 "filename": "tax-document.pdf",
                 "file_size": 1024000,
                 "blob_path": "uploads/uuid.pdf",

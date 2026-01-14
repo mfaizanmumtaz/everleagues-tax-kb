@@ -1,0 +1,490 @@
+{
+    "states": {
+        "AL": {
+            "name": "Alabama",
+            "cities": [
+                "Birmingham",
+                "Montgomery",
+                "Mobile"
+            ]
+        },
+        "AK": {
+            "name": "Alaska",
+            "cities": [
+                "Anchorage",
+                "Fairbanks",
+                "Juneau"
+            ]
+        },
+        "AZ": {
+            "name": "Arizona",
+            "cities": [
+                "Phoenix",
+                "Tucson",
+                "Mesa",
+                "Scottsdale"
+            ]
+        },
+        "AR": {
+            "name": "Arkansas",
+            "cities": [
+                "Little Rock",
+                "Fort Smith",
+                "Fayetteville"
+            ]
+        },
+        "CA": {
+            "name": "California",
+            "cities": [
+                "Los Angeles",
+                "San Francisco",
+                "San Diego",
+                "San Jose",
+                "Sacramento"
+            ]
+        },
+        "CO": {
+            "name": "Colorado",
+            "cities": [
+                "Denver",
+                "Colorado Springs",
+                "Aurora",
+                "Boulder"
+            ]
+        },
+        "CT": {
+            "name": "Connecticut",
+            "cities": [
+                "Hartford",
+                "New Haven",
+                "Stamford",
+                "Bridgeport"
+            ]
+        },
+        "DE": {
+            "name": "Delaware",
+            "cities": [
+                "Wilmington",
+                "Dover",
+                "Newark"
+            ]
+        },
+        "FL": {
+            "name": "Florida",
+            "cities": [
+                "Miami",
+                "Orlando",
+                "Tampa",
+                "Jacksonville"
+            ]
+        },
+        "GA": {
+            "name": "Georgia",
+            "cities": [
+                "Atlanta",
+                "Savannah",
+                "Augusta",
+                "Columbus"
+            ]
+        },
+        "HI": {
+            "name": "Hawaii",
+            "cities": [
+                "Honolulu",
+                "Pearl City",
+                "Hilo"
+            ]
+        },
+        "ID": {
+            "name": "Idaho",
+            "cities": [
+                "Boise",
+                "Meridian",
+                "Nampa"
+            ]
+        },
+        "IL": {
+            "name": "Illinois",
+            "cities": [
+                "Chicago",
+                "Aurora",
+                "Naperville",
+                "Springfield"
+            ]
+        },
+        "IN": {
+            "name": "Indiana",
+            "cities": [
+                "Indianapolis",
+                "Fort Wayne",
+                "Evansville"
+            ]
+        },
+        "IA": {
+            "name": "Iowa",
+            "cities": [
+                "Des Moines",
+                "Cedar Rapids",
+                "Davenport"
+            ]
+        },
+        "KS": {
+            "name": "Kansas",
+            "cities": [
+                "Wichita",
+                "Overland Park",
+                "Kansas City",
+                "Topeka"
+            ]
+        },
+        "KY": {
+            "name": "Kentucky",
+            "cities": [
+                "Louisville",
+                "Lexington",
+                "Bowling Green"
+            ]
+        },
+        "LA": {
+            "name": "Louisiana",
+            "cities": [
+                "New Orleans",
+                "Baton Rouge",
+                "Shreveport"
+            ]
+        },
+        "ME": {
+            "name": "Maine",
+            "cities": [
+                "Portland",
+                "Lewiston",
+                "Bangor"
+            ]
+        },
+        "MD": {
+            "name": "Maryland",
+            "cities": [
+                "Baltimore",
+                "Frederick",
+                "Rockville",
+                "Annapolis"
+            ]
+        },
+        "MA": {
+            "name": "Massachusetts",
+            "cities": [
+                "Boston",
+                "Worcester",
+                "Springfield",
+                "Cambridge"
+            ]
+        },
+        "MI": {
+            "name": "Michigan",
+            "cities": [
+                "Detroit",
+                "Grand Rapids",
+                "Ann Arbor",
+                "Lansing"
+            ]
+        },
+        "MN": {
+            "name": "Minnesota",
+            "cities": [
+                "Minneapolis",
+                "Saint Paul",
+                "Rochester",
+                "Duluth"
+            ]
+        },
+        "MS": {
+            "name": "Mississippi",
+            "cities": [
+                "Jackson",
+                "Gulfport",
+                "Hattiesburg"
+            ]
+        },
+        "MO": {
+            "name": "Missouri",
+            "cities": [
+                "Kansas City",
+                "St. Louis",
+                "Springfield",
+                "Columbia"
+            ]
+        },
+        "MT": {
+            "name": "Montana",
+            "cities": [
+                "Billings",
+                "Missoula",
+                "Great Falls",
+                "Helena"
+            ]
+        },
+        "NE": {
+            "name": "Nebraska",
+            "cities": [
+                "Omaha",
+                "Lincoln",
+                "Bellevue"
+            ]
+        },
+        "NV": {
+            "name": "Nevada",
+            "cities": [
+                "Las Vegas",
+                "Henderson",
+                "Reno",
+                "Carson City"
+            ]
+        },
+        "NH": {
+            "name": "New Hampshire",
+            "cities": [
+                "Manchester",
+                "Nashua",
+                "Concord"
+            ]
+        },
+        "NJ": {
+            "name": "New Jersey",
+            "cities": [
+                "Newark",
+                "Jersey City",
+                "Paterson",
+                "Trenton"
+            ]
+        },
+        "NM": {
+            "name": "New Mexico",
+            "cities": [
+                "Albuquerque",
+                "Las Cruces",
+                "Santa Fe"
+            ]
+        },
+        "NY": {
+            "name": "New York",
+            "cities": [
+                "New York City",
+                "Buffalo",
+                "Rochester",
+                "Albany",
+                "Syracuse"
+            ]
+        },
+        "NC": {
+            "name": "North Carolina",
+            "cities": [
+                "Charlotte",
+                "Raleigh",
+                "Greensboro",
+                "Durham"
+            ]
+        },
+        "ND": {
+            "name": "North Dakota",
+            "cities": [
+                "Fargo",
+                "Bismarck",
+                "Grand Forks"
+            ]
+        },
+        "OH": {
+            "name": "Ohio",
+            "cities": [
+                "Columbus",
+                "Cleveland",
+                "Cincinnati",
+                "Toledo"
+            ]
+        },
+        "OK": {
+            "name": "Oklahoma",
+            "cities": [
+                "Oklahoma City",
+                "Tulsa",
+                "Norman"
+            ]
+        },
+        "OR": {
+            "name": "Oregon",
+            "cities": [
+                "Portland",
+                "Salem",
+                "Eugene",
+                "Bend"
+            ]
+        },
+        "PA": {
+            "name": "Pennsylvania",
+            "cities": [
+                "Philadelphia",
+                "Pittsburgh",
+                "Allentown",
+                "Harrisburg"
+            ]
+        },
+        "RI": {
+            "name": "Rhode Island",
+            "cities": [
+                "Providence",
+                "Warwick",
+                "Cranston"
+            ]
+        },
+        "SC": {
+            "name": "South Carolina",
+            "cities": [
+                "Charleston",
+                "Columbia",
+                "Greenville"
+            ]
+        },
+        "SD": {
+            "name": "South Dakota",
+            "cities": [
+                "Sioux Falls",
+                "Rapid City",
+                "Pierre"
+            ]
+        },
+        "TN": {
+            "name": "Tennessee",
+            "cities": [
+                "Nashville",
+                "Memphis",
+                "Knoxville",
+                "Chattanooga"
+            ]
+        },
+        "TX": {
+            "name": "Texas",
+            "cities": [
+                "Houston",
+                "Dallas",
+                "Austin",
+                "San Antonio",
+                "Fort Worth"
+            ]
+        },
+        "UT": {
+            "name": "Utah",
+            "cities": [
+                "Salt Lake City",
+                "Provo",
+                "West Valley City",
+                "Ogden"
+            ]
+        },
+        "VT": {
+            "name": "Vermont",
+            "cities": [
+                "Burlington",
+                "Montpelier",
+                "Rutland"
+            ]
+        },
+        "VA": {
+            "name": "Virginia",
+            "cities": [
+                "Virginia Beach",
+                "Norfolk",
+                "Richmond",
+                "Arlington"
+            ]
+        },
+        "WA": {
+            "name": "Washington",
+            "cities": [
+                "Seattle",
+                "Spokane",
+                "Tacoma",
+                "Olympia"
+            ]
+        },
+        "WV": {
+            "name": "West Virginia",
+            "cities": [
+                "Charleston",
+                "Huntington",
+                "Morgantown"
+            ]
+        },
+        "WI": {
+            "name": "Wisconsin",
+            "cities": [
+                "Milwaukee",
+                "Madison",
+                "Green Bay"
+            ]
+        },
+        "WY": {
+            "name": "Wyoming",
+            "cities": [
+                "Cheyenne",
+                "Casper",
+                "Laramie"
+            ]
+        },
+        "DC": {
+            "name": "District of Columbia",
+            "cities": [
+                "Washington"
+            ]
+        },
+        "PR": {
+            "name": "Puerto Rico",
+            "cities": [
+                "San Juan",
+                "Bayamon",
+                "Carolina"
+            ]
+        },
+        "VI": {
+            "name": "U.S. Virgin Islands",
+            "cities": [
+                "Charlotte Amalie",
+                "Christiansted"
+            ]
+        },
+        "GU": {
+            "name": "Guam",
+            "cities": [
+                "Hagatna",
+                "Dededo"
+            ]
+        }
+    },
+    "categories": [
+        "Federal",
+        "State",
+        "Local"
+    ],
+    "doc_types": [
+        "form",
+        "instructions",
+        "publication",
+        "schedule",
+        "regulation",
+        "ruling",
+        "notice",
+        "faq",
+        "guide",
+        "other"
+    ],
+    "tax_types": [
+        "income-tax",
+        "sales-tax",
+        "property-tax",
+        "payroll-tax",
+        "estate-tax",
+        "excise-tax",
+        "franchise-tax",
+        "gift-tax",
+        "capital-gains-tax",
+        "other"
+    ]
+}

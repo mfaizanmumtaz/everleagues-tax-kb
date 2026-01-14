@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Query, Path, Depends
 from typing import Optional, List
 from datetime import datetime
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database.connection import get_db
 from ..services.audit_log_service import AuditLogService
@@ -52,15 +52,15 @@ async def list_audit_logs(
     search: Optional[str] = Query(default=None, description="Search in details"),
     page: int = Query(default=1, ge=1, description="Page number"),
     limit: int = Query(default=20, ge=1, le=100, description="Items per page"),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     List audit logs with filters and pagination.
     """
     try:
         audit_service = AuditLogService(db)
-        
-        logs, total = audit_service.get_logs(
+
+        logs, total = await audit_service.get_logs(
             action=action,
             resource_type=resource_type,
             resource_id=resource_id,
@@ -94,15 +94,15 @@ async def get_document_audit_logs(
     document_id: str = Path(..., description="Document ID"),
     page: int = Query(default=1, ge=1, description="Page number"),
     limit: int = Query(default=50, ge=1, le=100, description="Items per page"),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Get all audit logs for a specific document.
     """
     try:
         audit_service = AuditLogService(db)
-        
-        logs, total = audit_service.get_logs_for_document(
+
+        logs, total = await audit_service.get_logs_for_document(
             document_id=document_id,
             page=page,
             limit=limit,
@@ -131,17 +131,17 @@ async def get_governance_audit_logs(
     actor: Optional[str] = Query(default=None, description="Filter by actor"),
     page: int = Query(default=1, ge=1, description="Page number"),
     limit: int = Query(default=20, ge=1, le=100, description="Items per page"),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Get governance-related audit logs.
-    
+
     This returns logs for governance state changes only.
     """
     try:
         audit_service = AuditLogService(db)
-        
-        logs, total = audit_service.get_governance_logs(
+
+        logs, total = await audit_service.get_governance_logs(
             document_id=document_id,
             actor=actor,
             page=page,

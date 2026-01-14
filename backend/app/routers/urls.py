@@ -6,7 +6,7 @@ from datetime import datetime
 from uuid import UUID
 from pydantic import BaseModel, Field
 from enum import Enum
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database.connection import get_db
 from ..services.url_db_service import UrlDbService
@@ -180,19 +180,19 @@ async def list_urls(
     search: Optional[str] = Query(default=None, description="Search in URL"),
     page: int = Query(default=1, ge=1, description="Page number"),
     limit: int = Query(default=20, ge=1, le=100, description="Items per page"),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     List URLs with filters and pagination.
     """
     try:
         url_service = UrlDbService(db)
-        
+
         # Map status and data_source to DB enums if provided
         db_status = _map_url_status(status) if status else None
         db_data_source = _map_data_source(data_source) if data_source else None
-        
-        urls, total = url_service.list_urls(
+
+        urls, total = await url_service.list_urls(
             category=category,
             state=state,
             status=db_status,
@@ -222,15 +222,15 @@ async def list_urls(
 @router.get("/{url_id}", response_model=URLResponse)
 async def get_url(
     url_id: str = Path(..., description="URL ID"),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Get a single URL by ID.
     """
     try:
         url_service = UrlDbService(db)
-        scrape_url = url_service.get_url(UUID(url_id))
-        
+        scrape_url = await url_service.get_url(UUID(url_id))
+
         if not scrape_url:
             raise HTTPException(status_code=404, detail="URL not found")
         
@@ -244,7 +244,7 @@ async def get_url(
 @router.post("", response_model=URLResponse, status_code=201)
 async def create_url(
     url_data: URLCreate,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Add a new URL for scraping.
@@ -252,13 +252,13 @@ async def create_url(
     try:
         url_service = UrlDbService(db)
         audit_service = AuditLogService(db)
-        
+
         # Check if URL already exists
-        existing = url_service.get_url_by_url(url_data.url)
+        existing = await url_service.get_url_by_url(url_data.url)
         if existing:
             raise HTTPException(status_code=400, detail="URL already exists")
-        
-        scrape_url = url_service.create_url(
+
+        scrape_url = await url_service.create_url(
             url=url_data.url,
             name=url_data.name,
             description=url_data.description,
@@ -273,9 +273,9 @@ async def create_url(
             max_requests_per_minute=url_data.max_requests_per_minute,
             max_files_per_session=url_data.max_files_per_session,
         )
-        
+
         # Log the action
-        audit_service.log_url_create(
+        await audit_service.log_url_create(
             url_id=str(scrape_url.id),
             url=scrape_url.url,
             values={"category": url_data.category, "data_source": url_data.data_source.value},
@@ -292,7 +292,7 @@ async def create_url(
 async def update_url(
     url_id: str = Path(..., description="URL ID"),
     updates: URLUpdate = ...,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Update a URL.
@@ -314,9 +314,9 @@ async def update_url(
                     update_kwargs["status"] = _map_url_status(value)
                 else:
                     update_kwargs[key] = value
-        
-        scrape_url = url_service.update_url(UUID(url_id), **update_kwargs)
-        
+
+        scrape_url = await url_service.update_url(UUID(url_id), **update_kwargs)
+
         if not scrape_url:
             raise HTTPException(status_code=404, detail="URL not found")
         
@@ -330,7 +330,7 @@ async def update_url(
 @router.delete("/{url_id}", status_code=204)
 async def delete_url(
     url_id: str = Path(..., description="URL ID"),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Delete a URL.
@@ -338,20 +338,20 @@ async def delete_url(
     try:
         url_service = UrlDbService(db)
         audit_service = AuditLogService(db)
-        
+
         # Get URL for audit log
-        scrape_url = url_service.get_url(UUID(url_id))
+        scrape_url = await url_service.get_url(UUID(url_id))
         if not scrape_url:
             raise HTTPException(status_code=404, detail="URL not found")
-        
+
         url_string = scrape_url.url
-        
+
         # Delete
-        if not url_service.delete_url(UUID(url_id)):
+        if not await url_service.delete_url(UUID(url_id)):
             raise HTTPException(status_code=404, detail="URL not found")
-        
+
         # Log the action
-        audit_service.log_url_delete(url_id=url_id, url=url_string)
+        await audit_service.log_url_delete(url_id=url_id, url=url_string)
         
     except HTTPException:
         raise
@@ -363,7 +363,7 @@ async def delete_url(
 async def trigger_scrape(
     background_tasks: BackgroundTasks,
     url_id: str = Path(..., description="URL ID"),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Trigger scraping for a URL.
@@ -372,11 +372,11 @@ async def trigger_scrape(
     """
     try:
         url_service = UrlDbService(db)
-        
-        scrape_url = url_service.get_url(UUID(url_id))
+
+        scrape_url = await url_service.get_url(UUID(url_id))
         if not scrape_url:
             raise HTTPException(status_code=404, detail="URL not found")
-        
+
         # Check if already scraping
         if scrape_url.status == DbUrlStatus.SCRAPING:
             return ScrapeProgress(
@@ -386,9 +386,9 @@ async def trigger_scrape(
                 total=_scrape_tasks.get(url_id, {}).get("total", 0),
                 message="Scraping already in progress",
             )
-        
+
         # Update status to scraping
-        url_service.update_url_status(UUID(url_id), DbUrlStatus.SCRAPING)
+        await url_service.update_url_status(UUID(url_id), DbUrlStatus.SCRAPING)
         
         # Initialize progress
         _scrape_tasks[url_id] = {
@@ -401,48 +401,48 @@ async def trigger_scrape(
         # Background task for scraping (mock implementation)
         async def do_scrape(uid: str, url_string: str):
             import asyncio
-            from ..database.connection import SessionLocal
-            
+            from ..database.connection import AsyncSessionLocal
+
             try:
                 _scrape_tasks[uid]["message"] = "Scanning URL..."
                 _scrape_tasks[uid]["total"] = 10
-                
+
                 for i in range(10):
                     await asyncio.sleep(0.5)
                     _scrape_tasks[uid]["current"] = i + 1
                     _scrape_tasks[uid]["message"] = f"Processing document {i + 1}/10"
-                
+
                 _scrape_tasks[uid]["status"] = "completed"
                 _scrape_tasks[uid]["message"] = "Scraping completed"
-                
+
                 # Update database with new session
-                with SessionLocal() as db_session:
+                async with AsyncSessionLocal() as db_session:
                     svc = UrlDbService(db_session)
                     audit_svc = AuditLogService(db_session)
-                    
-                    svc.update_url_status(UUID(uid), DbUrlStatus.ACTIVE)
-                    svc.update_scrape_stats(
+
+                    await svc.update_url_status(UUID(uid), DbUrlStatus.ACTIVE)
+                    await svc.update_scrape_stats(
                         UUID(uid),
                         last_scraped_at=datetime.utcnow(),
                         last_successful_at=datetime.utcnow(),
                     )
-                    svc.increment_documents_count(UUID(uid), 10)
-                    
+                    await svc.increment_documents_count(UUID(uid), 10)
+
                     # Log the scrape action
-                    audit_svc.log_url_scrape(
+                    await audit_svc.log_url_scrape(
                         url_id=uid,
                         url=url_string,
                         documents_created=10,
                     )
-                    
+
             except Exception as e:
                 _scrape_tasks[uid]["status"] = "error"
                 _scrape_tasks[uid]["message"] = str(e)
-                
+
                 # Update database with error status
-                with SessionLocal() as db_session:
+                async with AsyncSessionLocal() as db_session:
                     svc = UrlDbService(db_session)
-                    svc.update_url_status(UUID(uid), DbUrlStatus.ERROR, str(e))
+                    await svc.update_url_status(UUID(uid), DbUrlStatus.ERROR, str(e))
         
         background_tasks.add_task(do_scrape, url_id, scrape_url.url)
         
@@ -462,15 +462,15 @@ async def trigger_scrape(
 @router.get("/{url_id}/scrape/progress", response_model=ScrapeProgress)
 async def get_scrape_progress(
     url_id: str = Path(..., description="URL ID"),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Get scraping progress for a URL.
     """
     try:
         url_service = UrlDbService(db)
-        
-        scrape_url = url_service.get_url(UUID(url_id))
+
+        scrape_url = await url_service.get_url(UUID(url_id))
         if not scrape_url:
             raise HTTPException(status_code=404, detail="URL not found")
         

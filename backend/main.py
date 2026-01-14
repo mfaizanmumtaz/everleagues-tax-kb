@@ -1,9 +1,11 @@
 """FastAPI application entry point."""
 
+from app.services.blob_storage_service import get_blob_storage_service
+from app.database.connection import async_engine
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-
+from sqlalchemy import text
 from app.config import settings
 from app.routers import search, documents, dashboard, governance, urls, audit, upload
 from app.services.solr_service import get_solr_service
@@ -17,10 +19,8 @@ async def lifespan(app: FastAPI):
     
     # Check PostgreSQL connection
     try:
-        from sqlalchemy import text
-        from app.database.connection import engine
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
+        async with async_engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
             print("  PostgreSQL: OK")
     except Exception as e:
         print(f"  PostgreSQL: NOT AVAILABLE ({e})")
@@ -42,7 +42,6 @@ async def lifespan(app: FastAPI):
     
     # Check Azure Blob Storage
     try:
-        from app.services.blob_storage_service import get_blob_storage_service
         blob_service = get_blob_storage_service()
         if blob_service.is_configured():
             print("  Azure Blob Storage: Configured")
@@ -146,4 +145,5 @@ if __name__ == "__main__":
         port=settings.api_port,
         reload=settings.debug,
     )
+
 
