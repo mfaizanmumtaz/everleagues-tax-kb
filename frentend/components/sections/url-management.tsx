@@ -19,7 +19,11 @@ import {
   Upload,
   FileText,
   X,
+  Loader2,
 } from "lucide-react"
+import { uploadFile, deleteDocument, listDocuments, ApiError } from "@/lib/api"
+import { getStateCode, getStateName } from "@/lib/states"
+import type { FileUploadMetadata, DocumentResponse } from "@/lib/types"
 
 interface URL {
   id: string
@@ -93,54 +97,7 @@ const US_STATES = [
   "Wyoming",
 ]
 
-const initialURLs: URL[] = [
-  {
-    id: "2",
-    url: "https://www.tax.ca.gov/forms-publications",
-    category: "State",
-    state: "California",
-    active: true,
-    lastUpdated: "4 hours ago",
-    dataSource: "scrape",
-    scheduleFrequency: "daily",
-    nextScheduledRun: "2024-11-21 03:00 UTC",
-    lastSuccessfulRun: "2024-11-20 03:00 UTC",
-  },
-  {
-    id: "3",
-    url: "https://revenue.texas.gov/forms",
-    category: "State",
-    state: "Texas",
-    active: true,
-    lastUpdated: "6 hours ago",
-    dataSource: "scrape",
-    scheduleFrequency: "weekly",
-    nextScheduledRun: "2024-11-25 02:00 UTC",
-    lastSuccessfulRun: "2024-11-18 02:00 UTC",
-  },
-  {
-    id: "4",
-    url: "https://www.nys.gov/tax-forms",
-    category: "State",
-    state: "New York",
-    active: false,
-    lastUpdated: "2 days ago",
-    dataSource: "scrape",
-    scheduleFrequency: "monthly",
-    nextScheduledRun: "2024-12-01 01:00 UTC",
-    lastSuccessfulRun: "2024-11-01 01:00 UTC",
-  },
-  {
-    id: "5",
-    url: "https://www.mde.maryland.gov/tax",
-    category: "State",
-    state: "Maryland",
-    active: true,
-    lastUpdated: "1 day ago",
-    dataSource: "scrape",
-    scheduleFrequency: "on_demand",
-  },
-]
+const initialURLs: URL[] = []
 
 const SCHEDULE_FREQUENCIES = [
   { value: "on_demand", label: "On Demand" },
@@ -152,7 +109,7 @@ const SCHEDULE_FREQUENCIES = [
 ] as const
 
 export default function URLManagement() {
-  const [urls, setURLs] = useState<URL[]>(initialURLs)
+  const [urls, setURLs] = useState<URL[]>([])
   const [newURL, setNewURL] = useState("")
   const [newCategory, setNewCategory] = useState<"State" | "Federal" | "Local">("Federal")
   const [newState, setNewState] = useState("")
@@ -191,6 +148,13 @@ export default function URLManagement() {
   const stateDropdownRef = useRef<HTMLDivElement>(null)
   const statusDropdownRef = useRef<HTMLDivElement>(null)
   const scheduleDropdownRef = useRef<HTMLDivElement>(null)
+
+  // API states
+  const [isUploading, setIsUploading] = useState(false)
+  const [uploadError, setUploadError] = useState<string | null>(null)
+  const [isDeleting, setIsDeleting] = useState<string | null>(null)
+  const [isLoadingList, setIsLoadingList] = useState(false)
+  const [uploadStatus, setUploadStatus] = useState<{ type: 'idle' | 'uploading' | 'success' | 'error'; message?: string; fileName?: string }>({ type: 'idle' })
 
   // Check for duplicate URLs
   const checkDuplicateUrl = (urlToCheck: string): string | null => {
@@ -243,7 +207,53 @@ export default function URLManagement() {
     return () => document.removeEventListener("mousedown", handleClickOutside)
   }, [])
 
-  const handleAddURL = () => {
+  // Load documents on mount
+  useEffect(() => {
+    fetchDocuments()
+  }, [])
+
+  const fetchDocuments = async () => {
+    setIsLoadingList(true)
+    try {
+      const response = await listDocuments({ limit: 100 }) // Adjust limit as needed
+
+      const mappedDocs: URL[] = response.items.map((doc: DocumentResponse) => {
+        // Determine data source - if it has a file name but no source URL, it's likely a file upload
+        const isFile = !!doc.name && (!doc.source_url || doc.source_url.includes('blob.core.windows.net'))
+
+        // Use uploaded_date as primary timestamp (it's the only one Solr actually stores)
+        // Fall back to updated_at or created_at if available
+        const timestamp = doc.uploaded_date || doc.updated_at || doc.created_at
+        const lastUpdated = timestamp ? new Date(timestamp).toLocaleDateString() : "unknown"
+
+        return {
+          id: doc.id,
+          url: doc.source_url || doc.name,
+          category: (doc.category as any) || "Federal",
+          state: doc.state ? (getStateName(doc.state) || doc.state) : undefined,
+          city: doc.city,
+          active: true, // Backend documents don't seem to have an 'active' flag yet
+          lastUpdated,
+          dataSource: isFile ? "file" : "scrape",
+          fileName: doc.name,
+          fileSize: undefined, // Size is string like "2.4 MB" in initialFiles, backend might return bytes or string
+          scheduleFrequency: "on_demand",
+        }
+      })
+
+      setURLs(mappedDocs)
+    } catch {
+      // Silently handle errors - backend may not be running
+      // User will just see an empty list which is expected
+    } finally {
+      setIsLoadingList(false)
+    }
+  }
+
+  const handleAddURL = async () => {
+    // Reset error state
+    setUploadError(null)
+
     if (dataSource === "file" && !uploadedFile) {
       setValidationStatus("invalid")
       return
@@ -271,6 +281,52 @@ export default function URLManagement() {
       }
       setValidationStatus("valid")
 
+      // For file uploads, use fire-and-forget approach - don't block UI
+      // Backend now returns immediately with "processing" status and processes in background
+      if (dataSource === "file" && uploadedFile) {
+        // Build metadata for backend
+        const metadata: FileUploadMetadata = {
+          jurisdiction: newCategory.toLowerCase() as "federal" | "state" | "local",
+          state: newState ? getStateCode(newState) : undefined,
+          city: newCategory === "Local" ? newCity : undefined,
+        }
+
+        // Store filename for status message
+        const fileName = uploadedFile.name
+
+        // Set uploading status
+        setUploadStatus({ type: 'uploading', message: 'Uploading and processing...', fileName })
+
+        // Start upload in background (fire-and-forget)
+        // The file will appear in el-cloud-files when processing completes
+        uploadFile(uploadedFile, metadata)
+          .then(() => {
+            // Show success message inside the form
+            setUploadStatus({
+              type: 'success',
+              message: 'File uploaded successfully! It is now being processed and will appear in Cloud Files once complete.',
+              fileName
+            })
+            // Reset the file input so user can upload another file
+            setUploadedFile(null)
+            if (fileInputRef.current) {
+              fileInputRef.current.value = ""
+            }
+          })
+          .catch((error) => {
+            console.error("Upload failed:", error)
+            setUploadStatus({
+              type: 'error',
+              message: `Upload failed: ${error instanceof Error ? error.message : 'Please try again.'}`,
+              fileName
+            })
+          })
+
+        // Don't close form or reset everything - just reset the file so user can upload more
+        return
+      }
+
+      // For scrape/API sources, keep local mock behavior for now
       const url: URL = {
         id: String(Date.now()),
         url: dataSource === "file" ? uploadedFile?.name || "File Upload" : newURL,
@@ -372,8 +428,31 @@ export default function URLManagement() {
     setURLs(urls.map((u) => (u.id === id ? { ...u, active } : u)))
   }
 
-  const deleteURL = (id: string) => {
-    setURLs(urls.filter((u) => u.id !== id))
+  const deleteURL = async (id: string) => {
+    const urlToDelete = urls.find(u => u.id === id)
+    const displayName = urlToDelete?.fileName || urlToDelete?.url || "this item"
+
+    if (!window.confirm(`Are you sure you want to delete "${displayName}"? This action cannot be undone.`)) {
+      return
+    }
+
+    // For file uploads, call the real API
+    if (urlToDelete?.dataSource === "file") {
+      setIsDeleting(id)
+      try {
+        await deleteDocument(id)
+        setURLs(urls.filter((u) => u.id !== id))
+      } catch (error) {
+        console.error("Failed to delete document:", error)
+        // Still remove from UI for now
+        setURLs(urls.filter((u) => u.id !== id))
+      } finally {
+        setIsDeleting(null)
+      }
+    } else {
+      // For non-file sources, just remove locally
+      setURLs(urls.filter((u) => u.id !== id))
+    }
   }
 
   const handleStartScrape = (id: string, continueFromLimit?: boolean) => {
@@ -383,15 +462,15 @@ export default function URLManagement() {
     setShowFileLimitWarning(false)
     setScrapingUrlId(id)
     setScrapingProgress({ current: 0, total: 100, status: "Initializing scrape..." })
-    
+
     // Simulate scraping progress with file counting
     let progress = continueFromLimit ? 50 : 0
     let fileCount = continueFromLimit ? filesScrapedCount : 0
-    
+
     const interval = setInterval(() => {
       progress += Math.random() * 15
       fileCount += Math.floor(Math.random() * 500) + 100
-      
+
       // Check file limit
       if (fileCount >= maxFilesPerSession) {
         clearInterval(interval)
@@ -401,15 +480,15 @@ export default function URLManagement() {
         setShowFileLimitWarning(true)
         return
       }
-      
+
       if (progress >= 100) {
         clearInterval(interval)
         setScrapingProgress(null)
         setScrapingUrlId(null)
         setFilesScrapedCount(0)
-        setURLs(prev => prev.map(u => 
-          u.id === id 
-            ? { ...u, lastUpdated: "just now", lastSuccessfulRun: new Date().toISOString() } 
+        setURLs(prev => prev.map(u =>
+          u.id === id
+            ? { ...u, lastUpdated: "just now", lastSuccessfulRun: new Date().toISOString() }
             : u
         ))
       } else {
@@ -421,9 +500,9 @@ export default function URLManagement() {
           "Updating index..."
         ]
         setFilesScrapedCount(fileCount)
-        setScrapingProgress({ 
-          current: Math.min(progress, 99), 
-          total: 100, 
+        setScrapingProgress({
+          current: Math.min(progress, 99),
+          total: 100,
           status: `${statuses[Math.floor(progress / 20)] || statuses[0]} (${fileCount.toLocaleString()} files)`
         })
       }
@@ -487,9 +566,8 @@ export default function URLManagement() {
                     setDuplicateWarning(checkDuplicateUrl(e.target.value))
                   }}
                   placeholder="https://example.com/tax-forms"
-                  className={`w-full px-4 py-2.5 rounded-lg bg-input border text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary ${
-                    duplicateWarning ? "border-amber-500" : "border-border"
-                  }`}
+                  className={`w-full px-4 py-2.5 rounded-lg bg-input border text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary ${duplicateWarning ? "border-amber-500" : "border-border"
+                    }`}
                 />
                 {validationStatus === "valid" && (
                   <div className="flex items-center gap-2 text-green-500 text-sm mt-2">
@@ -501,7 +579,7 @@ export default function URLManagement() {
                     <AlertCircle size={16} /> {duplicateWarning}
                   </div>
                 )}
-                {validationStatus === "invalid" && dataSource !== "file" && (
+                {validationStatus === "invalid" && (
                   <div className="flex items-center gap-2 text-destructive text-sm mt-2">
                     <AlertCircle size={16} /> Invalid URL format
                     {newCategory === "State" && !newState ? " or state not selected" : ""}
@@ -520,12 +598,12 @@ export default function URLManagement() {
                   onClick={() => {
                     setDataSource("scrape")
                     setUploadedFile(null)
+                    setUploadStatus({ type: 'idle' })
                   }}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
-                    dataSource === "scrape"
-                      ? "bg-accent text-accent-foreground"
-                      : "bg-muted text-foreground hover:bg-muted/80"
-                  }`}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${dataSource === "scrape"
+                    ? "bg-accent text-accent-foreground"
+                    : "bg-muted text-foreground hover:bg-muted/80"
+                    }`}
                 >
                   <Globe size={16} />
                   Web Scraping
@@ -535,12 +613,12 @@ export default function URLManagement() {
                   onClick={() => {
                     setDataSource("api")
                     setUploadedFile(null)
+                    setUploadStatus({ type: 'idle' })
                   }}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
-                    dataSource === "api"
-                      ? "bg-accent text-accent-foreground"
-                      : "bg-muted text-foreground hover:bg-muted/80"
-                  }`}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${dataSource === "api"
+                    ? "bg-accent text-accent-foreground"
+                    : "bg-muted text-foreground hover:bg-muted/80"
+                    }`}
                 >
                   <Key size={16} />
                   API Integration
@@ -551,11 +629,10 @@ export default function URLManagement() {
                     setDataSource("file")
                     setNewURL("")
                   }}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
-                    dataSource === "file"
-                      ? "bg-accent text-accent-foreground"
-                      : "bg-muted text-foreground hover:bg-muted/80"
-                  }`}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${dataSource === "file"
+                    ? "bg-accent text-accent-foreground"
+                    : "bg-muted text-foreground hover:bg-muted/80"
+                    }`}
                 >
                   <Upload size={16} />
                   File Upload
@@ -605,11 +682,10 @@ export default function URLManagement() {
                       onDragLeave={handleDragLeave}
                       onDrop={handleDrop}
                       onClick={() => fileInputRef.current?.click()}
-                      className={`w-full px-4 py-8 rounded-lg border-2 border-dashed transition-colors cursor-pointer ${
-                        isDragging
-                          ? "border-accent bg-accent/10"
-                          : "border-border hover:border-accent/50 hover:bg-muted/50"
-                      }`}
+                      className={`w-full px-4 py-8 rounded-lg border-2 border-dashed transition-colors cursor-pointer ${isDragging
+                        ? "border-accent bg-accent/10"
+                        : "border-border hover:border-accent/50 hover:bg-muted/50"
+                        }`}
                     >
                       <div className="flex flex-col items-center justify-center gap-3">
                         <Upload size={32} className="text-muted-foreground" />
@@ -659,169 +735,211 @@ export default function URLManagement() {
                       <CheckCircle size={16} /> File selected successfully
                     </div>
                   )}
-                </div>
-              </div>
-            )}
-
-            {/* Scheduling Options */}
-            <div className="space-y-4 p-4 rounded-lg bg-muted/30 border border-border">
-              <label className="block text-sm font-medium text-foreground mb-2">Scheduling Options</label>
-              
-              {/* Script Now (On-Demand) */}
-              <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => setScriptNow(!scriptNow)}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                    scriptNow
-                      ? "bg-accent text-accent-foreground"
-                      : "bg-muted text-foreground hover:bg-muted/80"
-                  }`}
-                >
-                  <Play size={16} />
-                  Script Now (On-Demand)
-                </button>
-                {scriptNow && (
-                  <span className="text-xs text-muted-foreground">Will execute immediately after adding</span>
-                )}
-              </div>
-
-              {/* Update Frequency */}
-              <div>
-                <label className="block text-xs font-medium text-muted-foreground mb-2">Update Frequency</label>
-                <div ref={scheduleDropdownRef} className="relative">
-                  <button
-                    type="button"
-                    onClick={() => setScheduleDropdownOpen(!scheduleDropdownOpen)}
-                    className="w-full px-4 py-2.5 rounded-lg bg-input border border-border text-foreground focus:outline-none focus:ring-2 focus:ring-primary flex items-center justify-between hover:bg-muted/50 transition-colors"
-                  >
-                    <span className="text-sm flex items-center gap-2">
-                      <Clock size={16} className="text-muted-foreground" />
-                      {SCHEDULE_FREQUENCIES.find((f) => f.value === scheduleFrequency)?.label || "Select frequency"}
-                    </span>
-                    <ChevronDown
-                      size={16}
-                      className={`text-muted-foreground transition-transform ${scheduleDropdownOpen ? "rotate-180" : ""}`}
-                    />
-                  </button>
-                  {scheduleDropdownOpen && (
-                    <div className="absolute z-50 w-full mt-1 bg-card border border-border rounded-lg shadow-xl overflow-hidden">
-                      {SCHEDULE_FREQUENCIES.map((freq) => (
-                        <div
-                          key={freq.value}
-                          onClick={() => {
-                            setScheduleFrequency(freq.value)
-                            setScheduleDropdownOpen(false)
-                          }}
-                          className="px-4 py-2.5 hover:bg-muted/50 cursor-pointer transition-colors flex items-center justify-between text-sm border-b border-border last:border-b-0"
+                  {/* Upload Status Messages */}
+                  {uploadStatus.type === 'uploading' && (
+                    <div className="flex items-center gap-2 text-blue-500 text-sm mt-3 p-3 rounded-lg bg-blue-500/10 border border-blue-500/30">
+                      <Loader2 size={16} className="animate-spin" />
+                      <span>{uploadStatus.message}</span>
+                    </div>
+                  )}
+                  {uploadStatus.type === 'success' && (
+                    <div className="flex items-start gap-2 text-green-500 text-sm mt-3 p-3 rounded-lg bg-green-500/10 border border-green-500/30">
+                      <CheckCircle size={16} className="mt-0.5 flex-shrink-0" />
+                      <div>
+                        <p className="font-medium">Upload successful!</p>
+                        <p className="text-green-400/80 mt-1">"{uploadStatus.fileName}" is now being processed. It will appear in Cloud Files once complete.</p>
+                        <button
+                          type="button"
+                          onClick={() => setUploadStatus({ type: 'idle' })}
+                          className="text-xs text-green-400 underline mt-2 hover:text-green-300"
                         >
-                          <span className="text-foreground">{freq.label}</span>
-                          {scheduleFrequency === freq.value && <Check size={16} className="text-accent" />}
-                        </div>
-                      ))}
+                          Dismiss
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {uploadStatus.type === 'error' && (
+                    <div className="flex items-start gap-2 text-destructive text-sm mt-3 p-3 rounded-lg bg-destructive/10 border border-destructive/30">
+                      <AlertCircle size={16} className="mt-0.5 flex-shrink-0" />
+                      <div>
+                        <p className="font-medium">Upload failed</p>
+                        <p className="text-destructive/80 mt-1">{uploadStatus.message}</p>
+                        <button
+                          type="button"
+                          onClick={() => setUploadStatus({ type: 'idle' })}
+                          className="text-xs text-destructive underline mt-2 hover:text-destructive/80"
+                        >
+                          Dismiss
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
               </div>
-            </div>
+            )}
 
-            {/* Rate Limiting Controls */}
-            <div className="space-y-4 p-4 rounded-lg bg-amber-500/5 border border-amber-500/20">
-              <button
-                type="button"
-                onClick={() => setShowRateLimitSettings(!showRateLimitSettings)}
-                className="w-full flex items-center justify-between"
-              >
-                <label className="block text-sm font-medium text-foreground flex items-center gap-2 cursor-pointer">
-                  <Clock size={16} className="text-amber-600" />
-                  Rate Limiting (Avoid Bot Detection)
-                </label>
-                <ChevronDown
-                  size={16}
-                  className={`text-muted-foreground transition-transform ${showRateLimitSettings ? "rotate-180" : ""}`}
-                />
-              </button>
-              
-              {showRateLimitSettings && (
-                <div className="space-y-4 pt-2">
-                  {/* Delay Between Requests */}
-                  <div>
-                    <label className="block text-xs font-medium text-muted-foreground mb-2">
-                      Delay Between Requests: {scrapeDelay} second{scrapeDelay !== 1 ? "s" : ""}
-                    </label>
-                    <input
-                      type="range"
-                      min="1"
-                      max="10"
-                      value={scrapeDelay}
-                      onChange={(e) => setScrapeDelay(parseInt(e.target.value))}
-                      className="w-full"
-                    />
-                    <div className="flex justify-between text-xs text-muted-foreground mt-1">
-                      <span>1s (Fast)</span>
-                      <span>10s (Safe)</span>
-                    </div>
-                  </div>
+            {/* Scheduling Options - Only show for scraping/API, not file uploads */}
+            {dataSource !== "file" && (
+              <div className="space-y-4 p-4 rounded-lg bg-muted/30 border border-border">
+                <label className="block text-sm font-medium text-foreground mb-2">Scheduling Options</label>
 
-                  {/* Requests Per Minute */}
-                  <div>
-                    <label className="block text-xs font-medium text-muted-foreground mb-2">
-                      Max Requests Per Minute: {requestsPerMinute}
-                    </label>
-                    <input
-                      type="range"
-                      min="5"
-                      max="60"
-                      step="5"
-                      value={requestsPerMinute}
-                      onChange={(e) => setRequestsPerMinute(parseInt(e.target.value))}
-                      className="w-full"
-                    />
-                    <div className="flex justify-between text-xs text-muted-foreground mt-1">
-                      <span>5 (Conservative)</span>
-                      <span>60 (Aggressive)</span>
-                    </div>
-                  </div>
+                {/* Script Now (On-Demand) */}
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setScriptNow(!scriptNow)}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${scriptNow
+                      ? "bg-accent text-accent-foreground"
+                      : "bg-muted text-foreground hover:bg-muted/80"
+                      }`}
+                  >
+                    <Play size={16} />
+                    Script Now (On-Demand)
+                  </button>
+                  {scriptNow && (
+                    <span className="text-xs text-muted-foreground">Will execute immediately after adding</span>
+                  )}
+                </div>
 
-                  {/* File Limit Per Session */}
-                  <div>
-                    <label className="block text-xs font-medium text-muted-foreground mb-2">
-                      Max Files Per Session: {maxFilesPerSession.toLocaleString()}
-                    </label>
-                    <input
-                      type="range"
-                      min="100"
-                      max="50000"
-                      step="100"
-                      value={maxFilesPerSession}
-                      onChange={(e) => setMaxFilesPerSession(parseInt(e.target.value))}
-                      className="w-full"
-                    />
-                    <div className="flex justify-between text-xs text-muted-foreground mt-1">
-                      <span>100 (Testing)</span>
-                      <span>50,000 (Full Crawl)</span>
-                    </div>
-                  </div>
-
-                  {/* Rate Limit Summary */}
-                  <div className="p-3 rounded-lg bg-muted/50 border border-border">
-                    <p className="text-xs text-foreground">
-                      <span className="font-medium">Current Settings:</span> Scraping at max{" "}
-                      <span className="font-semibold text-amber-600">{requestsPerMinute}</span> requests/min with{" "}
-                      <span className="font-semibold text-amber-600">{scrapeDelay}s</span> delay between each request.
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Max files: <span className="font-semibold">{maxFilesPerSession.toLocaleString()}</span> | 
-                      Estimated time per 100 pages: ~{Math.ceil((100 * scrapeDelay) / 60)} minutes
-                    </p>
+                {/* Update Frequency */}
+                <div>
+                  <label className="block text-xs font-medium text-muted-foreground mb-2">Update Frequency</label>
+                  <div ref={scheduleDropdownRef} className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setScheduleDropdownOpen(!scheduleDropdownOpen)}
+                      className="w-full px-4 py-2.5 rounded-lg bg-input border border-border text-foreground focus:outline-none focus:ring-2 focus:ring-primary flex items-center justify-between hover:bg-muted/50 transition-colors"
+                    >
+                      <span className="text-sm flex items-center gap-2">
+                        <Clock size={16} className="text-muted-foreground" />
+                        {SCHEDULE_FREQUENCIES.find((f) => f.value === scheduleFrequency)?.label || "Select frequency"}
+                      </span>
+                      <ChevronDown
+                        size={16}
+                        className={`text-muted-foreground transition-transform ${scheduleDropdownOpen ? "rotate-180" : ""}`}
+                      />
+                    </button>
+                    {scheduleDropdownOpen && (
+                      <div className="absolute z-50 w-full mt-1 bg-card border border-border rounded-lg shadow-xl overflow-hidden">
+                        {SCHEDULE_FREQUENCIES.map((freq) => (
+                          <div
+                            key={freq.value}
+                            onClick={() => {
+                              setScheduleFrequency(freq.value)
+                              setScheduleDropdownOpen(false)
+                            }}
+                            className="px-4 py-2.5 hover:bg-muted/50 cursor-pointer transition-colors flex items-center justify-between text-sm border-b border-border last:border-b-0"
+                          >
+                            <span className="text-foreground">{freq.label}</span>
+                            {scheduleFrequency === freq.value && <Check size={16} className="text-accent" />}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
-              )}
-            </div>
+              </div>
+            )}
+
+            {/* Rate Limiting Controls - Only show for scraping, not file uploads */}
+            {dataSource !== "file" && (
+              <div className="space-y-4 p-4 rounded-lg bg-amber-500/5 border border-amber-500/20">
+                <button
+                  type="button"
+                  onClick={() => setShowRateLimitSettings(!showRateLimitSettings)}
+                  className="w-full flex items-center justify-between"
+                >
+                  <label className="block text-sm font-medium text-foreground flex items-center gap-2 cursor-pointer">
+                    <Clock size={16} className="text-amber-600" />
+                    Rate Limiting (Avoid Bot Detection)
+                  </label>
+                  <ChevronDown
+                    size={16}
+                    className={`text-muted-foreground transition-transform ${showRateLimitSettings ? "rotate-180" : ""}`}
+                  />
+                </button>
+
+                {showRateLimitSettings && (
+                  <div className="space-y-4 pt-2">
+                    {/* Delay Between Requests */}
+                    <div>
+                      <label className="block text-xs font-medium text-muted-foreground mb-2">
+                        Delay Between Requests: {scrapeDelay} second{scrapeDelay !== 1 ? "s" : ""}
+                      </label>
+                      <input
+                        type="range"
+                        min="1"
+                        max="10"
+                        value={scrapeDelay}
+                        onChange={(e) => setScrapeDelay(parseInt(e.target.value))}
+                        className="w-full"
+                      />
+                      <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                        <span>1s (Fast)</span>
+                        <span>10s (Safe)</span>
+                      </div>
+                    </div>
+
+                    {/* Requests Per Minute */}
+                    <div>
+                      <label className="block text-xs font-medium text-muted-foreground mb-2">
+                        Max Requests Per Minute: {requestsPerMinute}
+                      </label>
+                      <input
+                        type="range"
+                        min="5"
+                        max="60"
+                        step="5"
+                        value={requestsPerMinute}
+                        onChange={(e) => setRequestsPerMinute(parseInt(e.target.value))}
+                        className="w-full"
+                      />
+                      <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                        <span>5 (Conservative)</span>
+                        <span>60 (Aggressive)</span>
+                      </div>
+                    </div>
+
+                    {/* File Limit Per Session */}
+                    <div>
+                      <label className="block text-xs font-medium text-muted-foreground mb-2">
+                        Max Files Per Session: {maxFilesPerSession.toLocaleString()}
+                      </label>
+                      <input
+                        type="range"
+                        min="100"
+                        max="50000"
+                        step="100"
+                        value={maxFilesPerSession}
+                        onChange={(e) => setMaxFilesPerSession(parseInt(e.target.value))}
+                        className="w-full"
+                      />
+                      <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                        <span>100 (Testing)</span>
+                        <span>50,000 (Full Crawl)</span>
+                      </div>
+                    </div>
+
+                    {/* Rate Limit Summary */}
+                    <div className="p-3 rounded-lg bg-muted/50 border border-border">
+                      <p className="text-xs text-foreground">
+                        <span className="font-medium">Current Settings:</span> Scraping at max{" "}
+                        <span className="font-semibold text-amber-600">{requestsPerMinute}</span> requests/min with{" "}
+                        <span className="font-semibold text-amber-600">{scrapeDelay}s</span> delay between each request.
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Max files: <span className="font-semibold">{maxFilesPerSession.toLocaleString()}</span> |
+                        Estimated time per 100 pages: ~{Math.ceil((100 * scrapeDelay) / 60)} minutes
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className={`grid grid-cols-2 gap-4 transition-all duration-300 ease-out ${stateDropdownOpen ? "pb-56" : ""}`}>
               <div>
-                <label className="block text-sm font-medium text-foreground mb-2">Category</label>
+                <label className="block text-sm font-medium text-foreground mb-2">Jurisdiction</label>
                 <div ref={categoryDropdownRef} className="relative">
                   <button
                     type="button"
@@ -881,9 +999,8 @@ export default function URLManagement() {
                     type="button"
                     onClick={() => (newCategory === "State" || newCategory === "Local") && setStateDropdownOpen(!stateDropdownOpen)}
                     disabled={newCategory === "Federal"}
-                    className={`w-full px-4 py-2.5 rounded-lg bg-input border border-border text-foreground focus:outline-none focus:ring-2 focus:ring-accent flex items-center justify-between transition-colors ${
-                      newCategory !== "Federal" ? "hover:bg-muted/50 cursor-pointer" : "opacity-50 cursor-not-allowed"
-                    }`}
+                    className={`w-full px-4 py-2.5 rounded-lg bg-input border border-border text-foreground focus:outline-none focus:ring-2 focus:ring-accent flex items-center justify-between transition-colors ${newCategory !== "Federal" ? "hover:bg-muted/50 cursor-pointer" : "opacity-50 cursor-not-allowed"
+                      }`}
                   >
                     <span className={`text-sm ${newState ? "text-foreground" : "text-muted-foreground"}`}>
                       {newCategory === "Federal" ? "Select State or Local first" : newState || "Choose a state"}
@@ -957,17 +1074,23 @@ export default function URLManagement() {
             </div>
 
             <div className="flex gap-3 pt-2">
-              <button
-                onClick={handleValidateURL}
-                className="px-4 py-2.5 rounded-lg bg-muted text-foreground font-medium hover:bg-muted/80 transition-colors text-sm"
-              >
-                {dataSource === "file" ? "Validate File" : "Validate URL"}
-              </button>
+              {/* Validate button - Only show for scraping/API, not file uploads */}
+              {dataSource !== "file" && (
+                <button
+                  onClick={handleValidateURL}
+                  disabled={isUploading}
+                  className="px-4 py-2.5 rounded-lg bg-muted text-foreground font-medium hover:bg-muted/80 transition-colors text-sm disabled:opacity-50"
+                >
+                  Validate URL
+                </button>
+              )}
               <button
                 onClick={handleAddURL}
-                className="px-4 py-2.5 rounded-lg bg-accent text-accent-foreground font-medium hover:bg-accent/90 transition-colors text-sm"
+                disabled={isUploading}
+                className="px-4 py-2.5 rounded-lg bg-accent text-accent-foreground font-medium hover:bg-accent/90 transition-colors text-sm disabled:opacity-50 flex items-center gap-2"
               >
-                {dataSource === "file" ? "Upload File" : "Add URL"}
+                {isUploading && <Loader2 size={16} className="animate-spin" />}
+                {isUploading ? "Uploading..." : (dataSource === "file" ? "Upload File" : "Add URL")}
               </button>
               <button
                 onClick={() => {
@@ -987,12 +1110,21 @@ export default function URLManagement() {
                   setScriptNow(false)
                   setValidationStatus("none")
                   setDuplicateWarning(null)
+                  setUploadError(null)
                 }}
-                className="px-4 py-2.5 rounded-lg bg-muted text-foreground font-medium hover:bg-muted/80 transition-colors text-sm"
+                disabled={isUploading}
+                className="px-4 py-2.5 rounded-lg bg-muted text-foreground font-medium hover:bg-muted/80 transition-colors text-sm disabled:opacity-50"
               >
                 Cancel
               </button>
             </div>
+
+            {uploadError && (
+              <div className="flex items-center gap-2 text-destructive text-sm mt-3 p-3 bg-destructive/10 rounded-lg border border-destructive/20">
+                <AlertCircle size={16} />
+                {uploadError}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1023,11 +1155,10 @@ export default function URLManagement() {
         </div>
         <button
           onClick={() => setShowDuplicatesOnly(!showDuplicatesOnly)}
-          className={`px-3 py-2.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
-            showDuplicatesOnly
-              ? "bg-amber-500/20 text-amber-600 border border-amber-500/30"
-              : "bg-muted text-foreground hover:bg-muted/80 border border-border"
-          }`}
+          className={`px-3 py-2.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${showDuplicatesOnly
+            ? "bg-amber-500/20 text-amber-600 border border-amber-500/30"
+            : "bg-muted text-foreground hover:bg-muted/80 border border-border"
+            }`}
         >
           <AlertCircle size={16} />
           Show Duplicates
@@ -1054,7 +1185,7 @@ export default function URLManagement() {
           <div className="flex items-center gap-4">
             <div className="w-48">
               <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
-                <div 
+                <div
                   className="h-full bg-accent transition-all duration-300"
                   style={{ width: `${scrapingProgress.current}%` }}
                 />
@@ -1089,7 +1220,16 @@ export default function URLManagement() {
             </tr>
           </thead>
           <tbody>
-            {currentURLs.length === 0 ? (
+            {isLoadingList ? (
+              <tr>
+                <td colSpan={8} className="px-6 py-12 text-center">
+                  <div className="flex flex-col items-center gap-3">
+                    <Loader2 size={32} className="text-accent animate-spin" />
+                    <p className="text-sm text-muted-foreground font-medium">Loading documents...</p>
+                  </div>
+                </td>
+              </tr>
+            ) : currentURLs.length === 0 ? (
               <tr>
                 <td colSpan={8} className="px-6 py-8 text-center text-muted-foreground">
                   {searchQuery ? "No URLs found matching your search" : "No URLs added yet"}
@@ -1129,11 +1269,10 @@ export default function URLManagement() {
                   </td>
                   <td className="px-6 py-4 text-sm">
                     <span
-                      className={`px-2 py-1.5 rounded-full text-xs font-semibold ${
-                        url.category === "State" ? "bg-primary/20 text-primary" : 
-                        url.category === "Local" ? "bg-amber-500/20 text-amber-600" : 
-                        "bg-muted text-muted-foreground"
-                      }`}
+                      className={`px-2 py-1.5 rounded-full text-xs font-semibold ${url.category === "State" ? "bg-primary/20 text-primary" :
+                        url.category === "Local" ? "bg-amber-500/20 text-amber-600" :
+                          "bg-muted text-muted-foreground"
+                        }`}
                     >
                       {url.category}
                     </span>
@@ -1142,67 +1281,69 @@ export default function URLManagement() {
                     {url.category === "Local" && url.city ? `${url.city}, ${url.state}` : url.state || "-"}
                   </td>
                   <td className="px-6 py-4">
-                    <div 
-                      ref={statusDropdownOpen === url.id ? statusDropdownRef : null}
-                      className="relative inline-block"
-                    >
-                      <button
-                        onClick={() => setStatusDropdownOpen(statusDropdownOpen === url.id ? null : url.id)}
-                        className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-[13px] font-medium transition-all duration-200 cursor-pointer ${
-                          url.active
+                    {url.dataSource === "file" ? (
+                      <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-[13px] font-medium bg-muted/50 text-muted-foreground">
+                        <span className="text-xs">N/A</span>
+                      </span>
+                    ) : (
+                      <div
+                        ref={statusDropdownOpen === url.id ? statusDropdownRef : null}
+                        className="relative inline-block"
+                      >
+                        <button
+                          onClick={() => setStatusDropdownOpen(statusDropdownOpen === url.id ? null : url.id)}
+                          className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-[13px] font-medium transition-all duration-200 cursor-pointer ${url.active
                             ? "bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20"
                             : "bg-zinc-500/10 text-zinc-400 hover:bg-zinc-500/20"
-                        }`}
-                      >
-                        <span 
-                          className={`w-2 h-2 rounded-full ${
-                            url.active ? "bg-emerald-500" : "bg-zinc-500"
-                          }`} 
-                        />
-                        <span className="tracking-wide">{url.active ? "Active" : "Inactive"}</span>
-                        <ChevronDown 
-                          size={14} 
-                          className={`opacity-60 transition-transform duration-200 ${statusDropdownOpen === url.id ? "rotate-180" : ""}`}
-                        />
-                      </button>
-                      
-                      {statusDropdownOpen === url.id && (
-                        <div className="absolute z-50 top-full left-0 mt-1.5 min-w-[140px] bg-card border border-border/80 rounded-lg shadow-xl overflow-hidden animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150">
-                          <div className="py-1">
-                            <button
-                              onClick={() => {
-                                updateURLStatus(url.id, true)
-                                setStatusDropdownOpen(null)
-                              }}
-                              className={`w-full flex items-center gap-2.5 px-3 py-2 text-[13px] font-medium transition-colors ${
-                                url.active 
-                                  ? "bg-emerald-500/10 text-emerald-500" 
-                                  : "text-foreground/80 hover:bg-muted/60"
+                            }`}
+                        >
+                          <span
+                            className={`w-2 h-2 rounded-full ${url.active ? "bg-emerald-500" : "bg-zinc-500"
                               }`}
-                            >
-                              <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                              <span>Active</span>
-                              {url.active && <Check size={14} className="ml-auto" />}
-                            </button>
-                            <button
-                              onClick={() => {
-                                updateURLStatus(url.id, false)
-                                setStatusDropdownOpen(null)
-                              }}
-                              className={`w-full flex items-center gap-2.5 px-3 py-2 text-[13px] font-medium transition-colors ${
-                                !url.active 
-                                  ? "bg-zinc-500/10 text-zinc-400" 
+                          />
+                          <span className="tracking-wide">{url.active ? "Active" : "Inactive"}</span>
+                          <ChevronDown
+                            size={14}
+                            className={`opacity-60 transition-transform duration-200 ${statusDropdownOpen === url.id ? "rotate-180" : ""}`}
+                          />
+                        </button>
+
+                        {statusDropdownOpen === url.id && (
+                          <div className="absolute z-50 top-full left-0 mt-1.5 min-w-[140px] bg-card border border-border/80 rounded-lg shadow-xl overflow-hidden animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150">
+                            <div className="py-1">
+                              <button
+                                onClick={() => {
+                                  updateURLStatus(url.id, true)
+                                  setStatusDropdownOpen(null)
+                                }}
+                                className={`w-full flex items-center gap-2.5 px-3 py-2 text-[13px] font-medium transition-colors ${url.active
+                                  ? "bg-emerald-500/10 text-emerald-500"
                                   : "text-foreground/80 hover:bg-muted/60"
-                              }`}
-                            >
-                              <span className="w-2 h-2 rounded-full bg-zinc-500" />
-                              <span>Inactive</span>
-                              {!url.active && <Check size={14} className="ml-auto" />}
-                            </button>
+                                  }`}
+                              >
+                                <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                                <span>Active</span>
+                                {url.active && <Check size={14} className="ml-auto" />}
+                              </button>
+                              <button
+                                onClick={() => {
+                                  updateURLStatus(url.id, false)
+                                  setStatusDropdownOpen(null)
+                                }}
+                                className={`w-full flex items-center gap-2.5 px-3 py-2 text-[13px] font-medium transition-colors ${!url.active
+                                  ? "bg-zinc-500/10 text-zinc-400"
+                                  : "text-foreground/80 hover:bg-muted/60"
+                                  }`}
+                              >
+                                <span className="w-2 h-2 rounded-full bg-zinc-500" />
+                                <span>Inactive</span>
+                                {!url.active && <Check size={14} className="ml-auto" />}
+                              </button>
+                            </div>
                           </div>
-                        </div>
-                      )}
-                    </div>
+                        )}
+                      </div>
+                    )}
                   </td>
                   <td className="px-6 py-4 text-sm">
                     <div className="flex flex-col gap-1">
@@ -1247,10 +1388,15 @@ export default function URLManagement() {
                       </button>
                       <button
                         onClick={() => deleteURL(url.id)}
-                        className="p-2 rounded-lg hover:bg-destructive/20 transition-colors"
+                        disabled={isDeleting === url.id}
+                        className="p-2 rounded-lg hover:bg-destructive/20 transition-colors disabled:opacity-50"
                         title="Delete URL"
                       >
-                        <Trash2 size={16} className="text-destructive" />
+                        {isDeleting === url.id ? (
+                          <Loader2 size={16} className="text-destructive animate-spin" />
+                        ) : (
+                          <Trash2 size={16} className="text-destructive" />
+                        )}
                       </button>
                     </div>
                   </td>
@@ -1275,11 +1421,10 @@ export default function URLManagement() {
               <button
                 key={page}
                 onClick={() => setCurrentPage(page)}
-                className={`px-3 py-1 rounded-lg font-medium transition-colors ${
-                  currentPage === page
-                    ? "bg-accent text-accent-foreground"
-                    : "bg-card border border-border hover:bg-muted text-foreground"
-                }`}
+                className={`px-3 py-1 rounded-lg font-medium transition-colors ${currentPage === page
+                  ? "bg-accent text-accent-foreground"
+                  : "bg-card border border-border hover:bg-muted text-foreground"
+                  }`}
               >
                 {page}
               </button>
@@ -1327,8 +1472,8 @@ export default function URLManagement() {
                     {viewingURL.category === "Local" ? "State / City" : "State"}
                   </label>
                   <p className="text-foreground text-sm mt-1">
-                    {viewingURL.category === "Local" && viewingURL.city 
-                      ? `${viewingURL.state} / ${viewingURL.city}` 
+                    {viewingURL.category === "Local" && viewingURL.city
+                      ? `${viewingURL.state} / ${viewingURL.city}`
                       : viewingURL.state || "N/A"}
                   </p>
                 </div>
@@ -1343,11 +1488,10 @@ export default function URLManagement() {
                 <div>
                   <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Status</label>
                   <div className="mt-1">
-                    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-xs font-medium ${
-                      viewingURL.active 
-                        ? "bg-emerald-500/10 text-emerald-500" 
-                        : "bg-zinc-500/10 text-zinc-400"
-                    }`}>
+                    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-xs font-medium ${viewingURL.active
+                      ? "bg-emerald-500/10 text-emerald-500"
+                      : "bg-zinc-500/10 text-zinc-400"
+                      }`}>
                       <span className={`w-1.5 h-1.5 rounded-full ${viewingURL.active ? "bg-emerald-500" : "bg-zinc-500"}`} />
                       {viewingURL.active ? "Active" : "Inactive"}
                     </span>
@@ -1414,7 +1558,7 @@ export default function URLManagement() {
                 <p className="text-sm text-muted-foreground">Scraping paused for safety</p>
               </div>
             </div>
-            
+
             <div className="p-4 rounded-lg bg-amber-500/10 border border-amber-500/30 mb-4">
               <p className="text-sm text-foreground mb-2">
                 <span className="font-semibold">{filesScrapedCount.toLocaleString()}</span> files have been processed,

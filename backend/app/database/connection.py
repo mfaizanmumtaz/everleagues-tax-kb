@@ -2,8 +2,7 @@
 
 from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from sqlalchemy.orm import sessionmaker, Session
-from typing import AsyncGenerator, Generator
+from typing import AsyncGenerator
 
 from ..config import get_settings
 
@@ -13,6 +12,7 @@ settings = get_settings()
 # ========================================
 # ASYNC DATABASE (Primary for Application)
 # ========================================
+
 
 def get_async_database_url(url: str) -> str:
     """Convert sync postgres URL to async asyncpg URL."""
@@ -68,9 +68,7 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 try:
     # Try to create sync engine, but it's optional if psycopg2 not installed
     sync_engine = create_engine(
-        settings.database_url,
-        pool_pre_ping=True,
-        echo=settings.database_echo
+        settings.database_url, pool_pre_ping=True, echo=settings.database_echo
     )
 except Exception:
     # If sync driver not available, we can use async for init_db with run_sync
@@ -86,14 +84,6 @@ def init_db() -> None:
     """
     from .base import Base
     # Import all models to register them with Base
-    from ..db_models import (
-        ScrapeUrl, ApiCredential, UploadedFile,
-        ScrapeJob, ScrapeJobLog,
-        DocumentRegistry, DocumentBlob,
-        GovernanceTransition,
-        AuditLog,
-        SystemSetting
-    )
 
     if sync_engine:
         Base.metadata.create_all(bind=sync_engine)

@@ -14,8 +14,10 @@ router = APIRouter(prefix="/audit", tags=["Audit"])
 
 # ==================== Pydantic Models ====================
 
+
 class AuditLogResponse(BaseModel):
     """Audit log entry response."""
+
     id: str
     action: str
     resource_type: str
@@ -30,6 +32,7 @@ class AuditLogResponse(BaseModel):
 
 class AuditLogsListResponse(BaseModel):
     """Response for audit logs list."""
+
     items: List[AuditLogResponse]
     total: int
     page: int
@@ -41,11 +44,16 @@ class AuditLogsListResponse(BaseModel):
 
 # ==================== API Endpoints ====================
 
+
 @router.get("/logs", response_model=AuditLogsListResponse)
 async def list_audit_logs(
     action: Optional[str] = Query(default=None, description="Filter by action type"),
-    resource_type: Optional[str] = Query(default=None, description="Filter by resource type"),
-    resource_id: Optional[str] = Query(default=None, description="Filter by resource ID"),
+    resource_type: Optional[str] = Query(
+        default=None, description="Filter by resource type"
+    ),
+    resource_id: Optional[str] = Query(
+        default=None, description="Filter by resource ID"
+    ),
     actor: Optional[str] = Query(default=None, description="Filter by actor"),
     date_from: Optional[datetime] = Query(default=None, description="Filter from date"),
     date_to: Optional[datetime] = Query(default=None, description="Filter to date"),
@@ -71,11 +79,11 @@ async def list_audit_logs(
             page=page,
             limit=limit,
         )
-        
+
         pages = (total + limit - 1) // limit if total > 0 else 1
-        
+
         items = [AuditLogResponse(**audit_service.to_dict(log)) for log in logs]
-        
+
         return AuditLogsListResponse(
             items=items,
             total=total,
@@ -107,11 +115,11 @@ async def get_document_audit_logs(
             page=page,
             limit=limit,
         )
-        
+
         pages = (total + limit - 1) // limit if total > 0 else 1
-        
+
         items = [AuditLogResponse(**audit_service.to_dict(log)) for log in logs]
-        
+
         return AuditLogsListResponse(
             items=items,
             total=total,
@@ -127,7 +135,9 @@ async def get_document_audit_logs(
 
 @router.get("/logs/governance", response_model=AuditLogsListResponse)
 async def get_governance_audit_logs(
-    document_id: Optional[str] = Query(default=None, description="Filter by document ID"),
+    document_id: Optional[str] = Query(
+        default=None, description="Filter by document ID"
+    ),
     actor: Optional[str] = Query(default=None, description="Filter by actor"),
     page: int = Query(default=1, ge=1, description="Page number"),
     limit: int = Query(default=20, ge=1, le=100, description="Items per page"),
@@ -147,11 +157,11 @@ async def get_governance_audit_logs(
             page=page,
             limit=limit,
         )
-        
+
         pages = (total + limit - 1) // limit if total > 0 else 1
-        
+
         items = [AuditLogResponse(**audit_service.to_dict(log)) for log in logs]
-        
+
         return AuditLogsListResponse(
             items=items,
             total=total,
@@ -163,4 +173,3 @@ async def get_governance_audit_logs(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-

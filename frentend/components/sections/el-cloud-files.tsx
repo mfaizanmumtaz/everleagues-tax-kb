@@ -1,8 +1,11 @@
 "use client"
 
 import { useState, useRef, useEffect } from "react"
-import { FileText, Filter, Trash2, Download, Search, ChevronLeft, ChevronRight, Globe, ExternalLink, AlertCircle, X, ChevronDown, Check, AlertTriangle, ChevronUp, Database, Cpu, RefreshCw, Archive, Unlink, GitCompare, Calendar, Edit2, Info, History, Clock, User, FileCheck, CheckCircle2, XCircle, ArrowRight } from "lucide-react"
+import { FileText, Filter, Trash2, Download, Search, ChevronLeft, ChevronRight, Globe, ExternalLink, AlertCircle, X, ChevronDown, Check, AlertTriangle, ChevronUp, Database, Cpu, RefreshCw, Archive, Unlink, GitCompare, Calendar, Edit2, Info, History, Clock, User, FileCheck, CheckCircle2, XCircle, ArrowRight, Loader2 } from "lucide-react"
 import { useGovernanceLog } from "@/contexts/governance-log-context"
+import { listDocuments, deleteDocument, ApiError } from "@/lib/api"
+import type { DocumentResponse, DocumentFilters } from "@/lib/types"
+import { getStateName } from "@/lib/states"
 
 interface IngestionHistoryEvent {
   timestamp: string
@@ -460,7 +463,7 @@ const formatSourcePath = (url: string): string => {
     const pathParts = urlObj.pathname.split("/").filter(Boolean)
     const domain = urlObj.hostname.replace("www.", "")
     const filename = pathParts[pathParts.length - 1] || ""
-    
+
     if (pathParts.length > 0) {
       return `${domain} › ${pathParts.slice(0, -1).join(" › ")}${filename ? ` › ${filename}` : ""}`
     }
@@ -536,50 +539,50 @@ const AUTHORITY_LEVELS = {
 // In production, this would be done on the backend during ingestion
 const getAuthorityLevelFromUrl = (url: string): 1 | 2 | 3 | 4 | 5 | 6 => {
   const urlLower = url.toLowerCase()
-  
+
   // Level 1: Statute/Reg (IRC, Treasury Regs, CFR)
-  if (urlLower.includes("law.cornell.edu") || 
-      urlLower.includes("govinfo.gov") ||
-      urlLower.includes("/irc/") ||
-      urlLower.includes("/cfr/") ||
-      urlLower.includes("treasury.gov/regulations")) {
+  if (urlLower.includes("law.cornell.edu") ||
+    urlLower.includes("govinfo.gov") ||
+    urlLower.includes("/irc/") ||
+    urlLower.includes("/cfr/") ||
+    urlLower.includes("treasury.gov/regulations")) {
     return 1
   }
-  
+
   // Level 2: Forms/Instructions
   if (urlLower.includes("irs.gov/forms-pubs") ||
-      urlLower.includes("irs.gov/forms-instructions") ||
-      urlLower.includes("/form-")) {
+    urlLower.includes("irs.gov/forms-instructions") ||
+    urlLower.includes("/form-")) {
     return 2
   }
-  
+
   // Level 3: Rulings/Procedures
   if (urlLower.includes("irs.gov/pub/irs-drop") ||
-      urlLower.includes("revenue-ruling") ||
-      urlLower.includes("revenue-procedure") ||
-      urlLower.includes("/rr-") ||
-      urlLower.includes("/rp-")) {
+    urlLower.includes("revenue-ruling") ||
+    urlLower.includes("revenue-procedure") ||
+    urlLower.includes("/rr-") ||
+    urlLower.includes("/rp-")) {
     return 3
   }
-  
+
   // Level 4: FAQs/Publications
   if (urlLower.includes("irs.gov/faqs") ||
-      urlLower.includes("irs.gov/publications") ||
-      urlLower.includes("/pub/") ||
-      urlLower.includes("/irm/")) {
+    urlLower.includes("irs.gov/publications") ||
+    urlLower.includes("/pub/") ||
+    urlLower.includes("/irm/")) {
     return 4
   }
-  
+
   // Level 5: Expert Sources
   if (urlLower.includes("cch.com") ||
-      urlLower.includes("ria.thomsonreuters.com") ||
-      urlLower.includes("pwc.com") ||
-      urlLower.includes("deloitte.com") ||
-      urlLower.includes("ey.com") ||
-      urlLower.includes("kpmg.com")) {
+    urlLower.includes("ria.thomsonreuters.com") ||
+    urlLower.includes("pwc.com") ||
+    urlLower.includes("deloitte.com") ||
+    urlLower.includes("ey.com") ||
+    urlLower.includes("kpmg.com")) {
     return 5
   }
-  
+
   // Level 6: Other/Low Authority (default)
   return 6
 }
@@ -812,6 +815,7 @@ export default function ELCloudFiles() {
   const [selectedStates, setSelectedStates] = useState<string[]>([])
   const [stateDropdownOpen, setStateDropdownOpen] = useState(false)
   const stateDropdownRef = useRef<HTMLDivElement>(null)
+  const [isLoadingList, setIsLoadingList] = useState(false)
 
   const allTags = Array.from(new Set(files.flatMap((f) => f.tags)))
   const sortedTags = allTags.sort((a, b) => {
@@ -844,18 +848,73 @@ export default function ELCloudFiles() {
     return () => document.removeEventListener("mousedown", handleClickOutside)
   }, [])
 
+  // Load documents on mount
+  useEffect(() => {
+    fetchDocuments()
+  }, [])
+
+  const fetchDocuments = async () => {
+    setIsLoadingList(true)
+    try {
+      const response = await listDocuments({ limit: 100 })
+
+      const mappedFiles: File[] = response.items.map((doc: DocumentResponse) => {
+        return {
+          id: doc.id,
+          name: doc.name,
+          size: doc.size || "Unknown",
+          tags: doc.tags || [],
+          uploadedDate: doc.created_at ? new Date(doc.created_at).toISOString().split('T')[0] : "Unknown",
+          syncStatus: (doc.sync_status as any) || "synced",
+          indexStatus: (doc.index_status as any) || "not_indexed",
+          sourceUrl: doc.source_url,
+          sourceDomain: doc.source_domain || (doc.source_url ? getDomainFromUrl(doc.source_url) : undefined),
+          syncError: doc.sync_error,
+          indexError: doc.index_error,
+          knowledgeBaseId: doc.knowledge_base_id,
+          knowledgeBaseName: doc.knowledge_base_id?.replace("kb_", "Tax – "), // Simplified mapping
+          taxYear: doc.tax_year,
+          effectiveFrom: doc.effective_from,
+          effectiveTo: doc.effective_to,
+          // Missing fields on backend that frontend uses
+          appliesToTaxYears: doc.tax_year ? [doc.tax_year] : [],
+          appliesToJurisdictions: doc.state ? ["state", doc.state] : (doc.category === "Federal" ? ["federal"] : []),
+          authorityLevel: (doc.authority_level as any) || 6,
+          authorityLevelRationale: doc.authority_level_rationale,
+          governanceState: (doc.governance_state as any) || "Draft",
+          docType: (doc.doc_type as any) || "other",
+          formFamily: doc.form_family || undefined,
+          chunkCount: doc.chunk_count,
+          tokensIndexed: doc.tokens_indexed,
+          embeddingModel: doc.embedding_model,
+          classificationConfidence: doc.classification_confidence,
+          needsHumanReview: doc.needs_human_review,
+          reviewReason: doc.review_reason,
+          reviewedAt: doc.reviewed_at,
+          reviewedBy: doc.reviewed_by,
+        }
+      })
+
+      setFiles(mappedFiles)
+    } catch (error) {
+      console.error("Failed to fetch documents:", error)
+    } finally {
+      setIsLoadingList(false)
+    }
+  }
+
   const filteredFiles = files.filter((f) => {
     const matchesTags = selectedTags.length === 0 || selectedTags.some((tag) => f.tags.includes(tag))
     const matchesKB = selectedKB === "all" || f.knowledgeBaseId === selectedKB
     const matchesAuthority = selectedAuthorityLevel === "all" || f.authorityLevel === selectedAuthorityLevel
     const matchesGovernanceState = selectedGovernanceStates.length === 0 || selectedGovernanceStates.includes(f.governanceState as GovernanceState)
-    const matchesReviewStatus = 
-      selectedReviewStatus === "all" || 
+    const matchesReviewStatus =
+      selectedReviewStatus === "all" ||
       (selectedReviewStatus === "needs_review" && f.needsHumanReview) ||
       (selectedReviewStatus === "reviewed" && !f.needsHumanReview && f.reviewedAt)
-    const matchesState = selectedStates.length === 0 || 
-      (f.appliesToJurisdictions && selectedStates.some(state => 
-        f.appliesToJurisdictions!.includes(state) || 
+    const matchesState = selectedStates.length === 0 ||
+      (f.appliesToJurisdictions && selectedStates.some(state =>
+        f.appliesToJurisdictions!.includes(state) ||
         f.appliesToJurisdictions!.includes(state.toUpperCase()) ||
         f.appliesToJurisdictions!.some(j => j.toLowerCase() === state.toLowerCase())
       ))
@@ -876,8 +935,33 @@ export default function ELCloudFiles() {
     setCurrentPage(1) // Reset to first page when filters change
   }
 
-  const deleteFile = (id: string) => {
-    setFiles(files.filter((f) => f.id !== id))
+  const handleDeleteFile = async (id: string) => {
+    const fileToDelete = files.find(f => f.id === id)
+    const displayName = fileToDelete?.name || "this file"
+
+    if (!window.confirm(`Are you sure you want to delete "${displayName}"? This action cannot be undone.`)) {
+      return
+    }
+
+    try {
+      await deleteDocument(id)
+      setFiles(files.filter(f => f.id !== id))
+      addLog(
+        id,
+        fileToDelete?.name || "Unknown",
+        "metadata_updated",
+        "deleted",
+        "Exists",
+        "Permanently removed",
+        "User deleted file",
+        "curator@example.com",
+        "curator@example.com"
+      )
+    } catch (error) {
+      console.error("Failed to delete file:", error)
+      // Fallback for UI responsiveness
+      setFiles(files.filter(f => f.id !== id))
+    }
   }
 
   const goToPage = (page: number) => {
@@ -1123,7 +1207,7 @@ export default function ELCloudFiles() {
         alert("Please provide a reason for overriding the authority level classification")
         return
       }
-      
+
       addLog(
         editingFileId,
         file.name,
@@ -1294,12 +1378,12 @@ export default function ELCloudFiles() {
   // Helper function to get status display text
   const getStatusDisplay = (syncStatus: string, indexStatus: string): string => {
     const syncText = syncStatus === "synced" ? "Synced" : syncStatus === "syncing" ? "Syncing" : "Sync Failed"
-    const indexText = 
-      indexStatus === "indexed" ? "Indexed" : 
-      indexStatus === "indexing" ? "Indexing..." : 
-      indexStatus === "index_failed" ? "Index Failed" : 
-      "Not Indexed"
-    
+    const indexText =
+      indexStatus === "indexed" ? "Indexed" :
+        indexStatus === "indexing" ? "Indexing..." :
+          indexStatus === "index_failed" ? "Index Failed" :
+            "Not Indexed"
+
     return `${syncText} · ${indexText}`
   }
 
@@ -1362,7 +1446,7 @@ export default function ELCloudFiles() {
         <div className="flex items-center gap-2 text-foreground font-semibold">
           <Filter size={18} /> Filters
         </div>
-        
+
         {/* KB Filter Dropdown */}
         <div className="relative inline-block" ref={kbDropdownRef}>
           <label className="block text-xs font-semibold text-muted-foreground uppercase mb-2">Knowledge Base</label>
@@ -1390,9 +1474,8 @@ export default function ELCloudFiles() {
                       setKbDropdownOpen(false)
                       setCurrentPage(1)
                     }}
-                    className={`w-full px-4 py-2.5 text-left hover:bg-muted/50 transition-colors flex items-center justify-between text-sm border-b border-border last:border-b-0 ${
-                      selectedKB === kb.id ? "bg-accent/10" : ""
-                    }`}
+                    className={`w-full px-4 py-2.5 text-left hover:bg-muted/50 transition-colors flex items-center justify-between text-sm border-b border-border last:border-b-0 ${selectedKB === kb.id ? "bg-accent/10" : ""
+                      }`}
                   >
                     <span className="text-foreground">{kb.name}</span>
                     {selectedKB === kb.id && <Check size={16} className="text-accent" />}
@@ -1408,309 +1491,298 @@ export default function ELCloudFiles() {
           <div className="flex items-center gap-2 text-foreground font-semibold">
             <Filter size={18} /> Tag Filter
           </div>
-        <div className="space-y-4">
-          {/* Jurisdiction Section */}
-          <div>
-            <p className="text-xs font-semibold text-muted-foreground uppercase mb-2">Jurisdiction</p>
-            <div className="flex flex-wrap gap-2">
-              {sortedTags
-                .filter((tag) => JURISDICTION_TAGS.includes(tag))
-                .map((tag) => {
-                  if (tag === "state") {
-                    // Special handling for "state" tag - show dropdown
-                    return (
-                      <div key={tag} ref={stateDropdownRef} className="relative inline-block">
-                        <button
-                          onClick={() => {
-                            setStateDropdownOpen(!stateDropdownOpen)
-                            // Also toggle the "state" tag if not already selected
-                            if (!selectedTags.includes(tag)) {
-                              toggleTag(tag)
-                            }
-                          }}
-                          className={`px-3 py-1 rounded-full text-sm font-medium transition-colors capitalize flex items-center gap-1.5 ${
-                            selectedTags.includes(tag) || selectedStates.length > 0
+          <div className="space-y-4">
+            {/* Jurisdiction Section */}
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase mb-2">Jurisdiction</p>
+              <div className="flex flex-wrap gap-2">
+                {sortedTags
+                  .filter((tag) => JURISDICTION_TAGS.includes(tag))
+                  .map((tag) => {
+                    if (tag === "state") {
+                      // Special handling for "state" tag - show dropdown
+                      return (
+                        <div key={tag} ref={stateDropdownRef} className="relative inline-block">
+                          <button
+                            onClick={() => {
+                              setStateDropdownOpen(!stateDropdownOpen)
+                              // Also toggle the "state" tag if not already selected
+                              if (!selectedTags.includes(tag)) {
+                                toggleTag(tag)
+                              }
+                            }}
+                            className={`px-3 py-1 rounded-full text-sm font-medium transition-colors capitalize flex items-center gap-1.5 ${selectedTags.includes(tag) || selectedStates.length > 0
                               ? "bg-accent text-accent-foreground"
                               : "bg-muted text-foreground hover:bg-muted/80"
-                          }`}
-                        >
-                          {tag}
-                          {(selectedTags.includes(tag) || selectedStates.length > 0) && " ✓"}
-                          <ChevronDown 
-                            size={14} 
-                            className={`opacity-60 transition-transform duration-200 ${stateDropdownOpen ? "rotate-180" : ""}`}
-                          />
-                        </button>
-                        
-                        {stateDropdownOpen && (
-                          <div className="absolute z-50 top-full left-0 mt-1.5 min-w-[200px] max-h-[300px] overflow-y-auto bg-card border border-border rounded-lg shadow-xl">
-                            <div className="p-2">
-                              <div className="flex items-center justify-between px-2 py-1.5 border-b border-border mb-1">
-                                <button
-                                  onClick={() => {
-                                    setSelectedStates([])
-                                    setCurrentPage(1)
-                                  }}
-                                  className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-                                >
-                                  Clear All
-                                </button>
-                                <button
-                                  onClick={() => {
-                                    setSelectedStates([...US_STATES])
-                                    setCurrentPage(1)
-                                  }}
-                                  className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-                                >
-                                  Select All
-                                </button>
-                              </div>
-                              <div className="space-y-1 max-h-[240px] overflow-y-auto">
-                                {US_STATES.map((state) => {
-                                  const isSelected = selectedStates.includes(state)
-                                  return (
-                                    <div
-                                      key={state}
-                                      onClick={() => {
-                                        setSelectedStates((prev) => 
-                                          prev.includes(state)
-                                            ? prev.filter((s) => s !== state)
-                                            : [...prev, state]
-                                        )
-                                        setCurrentPage(1)
-                                      }}
-                                      className={`flex items-center gap-2 px-2 py-1.5 text-sm cursor-pointer rounded hover:bg-muted/60 transition-colors ${
-                                        isSelected ? "bg-accent/10" : ""
-                                      }`}
-                                    >
-                                      <span className={`w-4 h-4 rounded border-2 flex items-center justify-center ${
-                                        isSelected ? "bg-accent border-accent" : "border-border"
-                                      }`}>
-                                        {isSelected && <Check size={12} className="text-accent-foreground" />}
-                                      </span>
-                                      <span className={isSelected ? "font-medium text-foreground" : "text-foreground/80"}>
-                                        {state}
-                                      </span>
-                                    </div>
-                                  )
-                                })}
+                              }`}
+                          >
+                            {tag}
+                            {(selectedTags.includes(tag) || selectedStates.length > 0) && " ✓"}
+                            <ChevronDown
+                              size={14}
+                              className={`opacity-60 transition-transform duration-200 ${stateDropdownOpen ? "rotate-180" : ""}`}
+                            />
+                          </button>
+
+                          {stateDropdownOpen && (
+                            <div className="absolute z-50 top-full left-0 mt-1.5 min-w-[200px] max-h-[300px] overflow-y-auto bg-card border border-border rounded-lg shadow-xl">
+                              <div className="p-2">
+                                <div className="flex items-center justify-between px-2 py-1.5 border-b border-border mb-1">
+                                  <button
+                                    onClick={() => {
+                                      setSelectedStates([])
+                                      setCurrentPage(1)
+                                    }}
+                                    className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                                  >
+                                    Clear All
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setSelectedStates([...US_STATES])
+                                      setCurrentPage(1)
+                                    }}
+                                    className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                                  >
+                                    Select All
+                                  </button>
+                                </div>
+                                <div className="space-y-1 max-h-[240px] overflow-y-auto">
+                                  {US_STATES.map((state) => {
+                                    const isSelected = selectedStates.includes(state)
+                                    return (
+                                      <div
+                                        key={state}
+                                        onClick={() => {
+                                          setSelectedStates((prev) =>
+                                            prev.includes(state)
+                                              ? prev.filter((s) => s !== state)
+                                              : [...prev, state]
+                                          )
+                                          setCurrentPage(1)
+                                        }}
+                                        className={`flex items-center gap-2 px-2 py-1.5 text-sm cursor-pointer rounded hover:bg-muted/60 transition-colors ${isSelected ? "bg-accent/10" : ""
+                                          }`}
+                                      >
+                                        <span className={`w-4 h-4 rounded border-2 flex items-center justify-center ${isSelected ? "bg-accent border-accent" : "border-border"
+                                          }`}>
+                                          {isSelected && <Check size={12} className="text-accent-foreground" />}
+                                        </span>
+                                        <span className={isSelected ? "font-medium text-foreground" : "text-foreground/80"}>
+                                          {state}
+                                        </span>
+                                      </div>
+                                    )
+                                  })}
+                                </div>
                               </div>
                             </div>
-                          </div>
-                        )}
-                      </div>
-                    )
-                  } else {
-                    // Regular tag button for "federal" and "local"
-                    return (
-                      <button
-                        key={tag}
-                        onClick={() => toggleTag(tag)}
-                        className={`px-3 py-1 rounded-full text-sm font-medium transition-colors capitalize ${
-                          selectedTags.includes(tag)
+                          )}
+                        </div>
+                      )
+                    } else {
+                      // Regular tag button for "federal" and "local"
+                      return (
+                        <button
+                          key={tag}
+                          onClick={() => toggleTag(tag)}
+                          className={`px-3 py-1 rounded-full text-sm font-medium transition-colors capitalize ${selectedTags.includes(tag)
                             ? "bg-accent text-accent-foreground"
                             : "bg-muted text-foreground hover:bg-muted/80"
-                        }`}
-                      >
-                        {tag}
-                        {selectedTags.includes(tag) && " ✓"}
-                      </button>
-                    )
-                  }
-                })}
-            </div>
-            {/* Show selected states count if any are selected */}
-            {selectedStates.length > 0 && (
-              <div className="mt-2 text-xs text-muted-foreground">
-                {selectedStates.length} state{selectedStates.length !== 1 ? 's' : ''} selected
+                            }`}
+                        >
+                          {tag}
+                          {selectedTags.includes(tag) && " ✓"}
+                        </button>
+                      )
+                    }
+                  })}
               </div>
-            )}
+              {/* Show selected states count if any are selected */}
+              {selectedStates.length > 0 && (
+                <div className="mt-2 text-xs text-muted-foreground">
+                  {selectedStates.length} state{selectedStates.length !== 1 ? 's' : ''} selected
+                </div>
+              )}
+            </div>
           </div>
-        </div>
 
-        {/* Authority Level Filter */}
-        <div>
-          <label className="block text-xs font-semibold text-muted-foreground uppercase mb-2">Authority Level</label>
-          <div className="flex flex-wrap gap-2">
-            <button
-              onClick={() => {
-                setSelectedAuthorityLevel("all")
-                setCurrentPage(1)
-              }}
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                selectedAuthorityLevel === "all"
-                  ? "bg-accent text-accent-foreground"
-                  : "bg-muted text-foreground hover:bg-muted/80"
-              }`}
-            >
-              All
-            </button>
-            {Object.entries(AUTHORITY_LEVELS).map(([level, info]) => (
+          {/* Authority Level Filter */}
+          <div>
+            <label className="block text-xs font-semibold text-muted-foreground uppercase mb-2">Authority Level</label>
+            <div className="flex flex-wrap gap-2">
               <button
-                key={level}
                 onClick={() => {
-                  setSelectedAuthorityLevel(Number(level) as 1 | 2 | 3 | 4 | 5 | 6)
+                  setSelectedAuthorityLevel("all")
                   setCurrentPage(1)
                 }}
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border ${
-                  selectedAuthorityLevel === Number(level)
-                    ? `${info.color} border-current`
-                    : "bg-muted text-foreground hover:bg-muted/80 border-border"
-                }`}
-                title={info.description}
-              >
-                Level {level}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Governance State Filter - Dropdown with Multi-Select */}
-        <div>
-          <label className="block text-xs font-semibold text-muted-foreground uppercase mb-2">Governance State</label>
-          <div ref={governanceFilterDropdownRef} className="relative">
-            <button
-              onClick={() => setGovernanceFilterDropdownOpen(!governanceFilterDropdownOpen)}
-              className="w-full px-4 py-2.5 rounded-lg bg-input border border-border text-foreground focus:outline-none focus:ring-2 focus:ring-accent flex items-center justify-between hover:bg-muted/50 transition-colors"
-            >
-              <span className="text-sm flex items-center gap-2">
-                <Filter size={16} className="text-muted-foreground" />
-                {selectedGovernanceStates.length === 0 
-                  ? "All States" 
-                  : selectedGovernanceStates.length === 1
-                    ? selectedGovernanceStates[0]
-                    : `${selectedGovernanceStates.length} states selected`}
-              </span>
-              <ChevronDown
-                size={16}
-                className={`text-muted-foreground transition-transform ${governanceFilterDropdownOpen ? "rotate-180" : ""}`}
-              />
-            </button>
-            {governanceFilterDropdownOpen && (
-              <div className="absolute z-50 w-full mt-1 bg-card border border-border rounded-lg shadow-xl overflow-hidden">
-                {/* Clear All / Select All */}
-                <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-muted/30">
-                  <button
-                    onClick={() => {
-                      setSelectedGovernanceStates([])
-                      setCurrentPage(1)
-                    }}
-                    className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    Clear All
-                  </button>
-                  <button
-                    onClick={() => {
-                      setSelectedGovernanceStates([...GOVERNANCE_STATES])
-                      setCurrentPage(1)
-                    }}
-                    className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    Select All
-                  </button>
-                </div>
-                {GOVERNANCE_STATES.map((state) => {
-                  const count = files.filter(f => f.governanceState === state).length
-                  const isSelected = selectedGovernanceStates.includes(state)
-                  return (
-                    <div
-                      key={state}
-                      onClick={() => {
-                        if (isSelected) {
-                          setSelectedGovernanceStates(selectedGovernanceStates.filter(s => s !== state))
-                        } else {
-                          setSelectedGovernanceStates([...selectedGovernanceStates, state])
-                        }
-                        setCurrentPage(1)
-                      }}
-                      className={`px-4 py-2.5 hover:bg-muted/50 cursor-pointer transition-colors flex items-center justify-between text-sm border-b border-border last:border-b-0 ${
-                        isSelected ? "bg-muted/30" : ""
-                      }`}
-                    >
-                      <div className="flex items-center gap-2">
-                        <div className={`w-4 h-4 rounded border flex items-center justify-center ${
-                          isSelected 
-                            ? "bg-accent border-accent" 
-                            : "border-border"
-                        }`}>
-                          {isSelected && <Check size={12} className="text-accent-foreground" />}
-                        </div>
-                        <span className={`${GOVERNANCE_STATE_STYLES[state].text}`}>{state}</span>
-                      </div>
-                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${GOVERNANCE_STATE_STYLES[state].badge}`}>
-                        {count}
-                      </span>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Review Status Filter - Red Flag System */}
-        <div>
-          <label className="block text-xs font-semibold text-muted-foreground uppercase mb-2">AI Review Status</label>
-          <div className="flex flex-wrap gap-2">
-            <button
-              onClick={() => {
-                setSelectedReviewStatus("all")
-                setCurrentPage(1)
-              }}
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                selectedReviewStatus === "all"
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${selectedAuthorityLevel === "all"
                   ? "bg-accent text-accent-foreground"
                   : "bg-muted text-foreground hover:bg-muted/80"
-              }`}
-            >
-              All
-            </button>
-            <button
-              onClick={() => {
-                setSelectedReviewStatus("needs_review")
-                setCurrentPage(1)
-              }}
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border flex items-center gap-1.5 ${
-                selectedReviewStatus === "needs_review"
+                  }`}
+              >
+                All
+              </button>
+              {Object.entries(AUTHORITY_LEVELS).map(([level, info]) => (
+                <button
+                  key={level}
+                  onClick={() => {
+                    setSelectedAuthorityLevel(Number(level) as 1 | 2 | 3 | 4 | 5 | 6)
+                    setCurrentPage(1)
+                  }}
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border ${selectedAuthorityLevel === Number(level)
+                    ? `${info.color} border-current`
+                    : "bg-muted text-foreground hover:bg-muted/80 border-border"
+                    }`}
+                  title={info.description}
+                >
+                  Level {level}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Governance State Filter - Dropdown with Multi-Select */}
+          <div>
+            <label className="block text-xs font-semibold text-muted-foreground uppercase mb-2">Governance State</label>
+            <div ref={governanceFilterDropdownRef} className="relative">
+              <button
+                onClick={() => setGovernanceFilterDropdownOpen(!governanceFilterDropdownOpen)}
+                className="w-full px-4 py-2.5 rounded-lg bg-input border border-border text-foreground focus:outline-none focus:ring-2 focus:ring-accent flex items-center justify-between hover:bg-muted/50 transition-colors"
+              >
+                <span className="text-sm flex items-center gap-2">
+                  <Filter size={16} className="text-muted-foreground" />
+                  {selectedGovernanceStates.length === 0
+                    ? "All States"
+                    : selectedGovernanceStates.length === 1
+                      ? selectedGovernanceStates[0]
+                      : `${selectedGovernanceStates.length} states selected`}
+                </span>
+                <ChevronDown
+                  size={16}
+                  className={`text-muted-foreground transition-transform ${governanceFilterDropdownOpen ? "rotate-180" : ""}`}
+                />
+              </button>
+              {governanceFilterDropdownOpen && (
+                <div className="absolute z-50 w-full mt-1 bg-card border border-border rounded-lg shadow-xl overflow-hidden">
+                  {/* Clear All / Select All */}
+                  <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-muted/30">
+                    <button
+                      onClick={() => {
+                        setSelectedGovernanceStates([])
+                        setCurrentPage(1)
+                      }}
+                      className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      Clear All
+                    </button>
+                    <button
+                      onClick={() => {
+                        setSelectedGovernanceStates([...GOVERNANCE_STATES])
+                        setCurrentPage(1)
+                      }}
+                      className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      Select All
+                    </button>
+                  </div>
+                  {GOVERNANCE_STATES.map((state) => {
+                    const count = files.filter(f => f.governanceState === state).length
+                    const isSelected = selectedGovernanceStates.includes(state)
+                    return (
+                      <div
+                        key={state}
+                        onClick={() => {
+                          if (isSelected) {
+                            setSelectedGovernanceStates(selectedGovernanceStates.filter(s => s !== state))
+                          } else {
+                            setSelectedGovernanceStates([...selectedGovernanceStates, state])
+                          }
+                          setCurrentPage(1)
+                        }}
+                        className={`px-4 py-2.5 hover:bg-muted/50 cursor-pointer transition-colors flex items-center justify-between text-sm border-b border-border last:border-b-0 ${isSelected ? "bg-muted/30" : ""
+                          }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <div className={`w-4 h-4 rounded border flex items-center justify-center ${isSelected
+                            ? "bg-accent border-accent"
+                            : "border-border"
+                            }`}>
+                            {isSelected && <Check size={12} className="text-accent-foreground" />}
+                          </div>
+                          <span className={`${GOVERNANCE_STATE_STYLES[state].color}`}>{state}</span>
+                        </div>
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${GOVERNANCE_STATE_STYLES[state].badge}`}>
+                          {count}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Review Status Filter - Red Flag System */}
+          <div>
+            <label className="block text-xs font-semibold text-muted-foreground uppercase mb-2">AI Review Status</label>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => {
+                  setSelectedReviewStatus("all")
+                  setCurrentPage(1)
+                }}
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${selectedReviewStatus === "all"
+                  ? "bg-accent text-accent-foreground"
+                  : "bg-muted text-foreground hover:bg-muted/80"
+                  }`}
+              >
+                All
+              </button>
+              <button
+                onClick={() => {
+                  setSelectedReviewStatus("needs_review")
+                  setCurrentPage(1)
+                }}
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border flex items-center gap-1.5 ${selectedReviewStatus === "needs_review"
                   ? "bg-red-500/20 text-red-600 border-red-500/30"
                   : "bg-muted text-foreground hover:bg-muted/80 border-border"
-              }`}
-            >
-              <AlertTriangle size={14} />
-              Needs Review
-            </button>
-            <button
-              onClick={() => {
-                setSelectedReviewStatus("reviewed")
-                setCurrentPage(1)
-              }}
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border flex items-center gap-1.5 ${
-                selectedReviewStatus === "reviewed"
+                  }`}
+              >
+                <AlertTriangle size={14} />
+                Needs Review
+              </button>
+              <button
+                onClick={() => {
+                  setSelectedReviewStatus("reviewed")
+                  setCurrentPage(1)
+                }}
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border flex items-center gap-1.5 ${selectedReviewStatus === "reviewed"
                   ? "bg-green-500/20 text-green-600 border-green-500/30"
                   : "bg-muted text-foreground hover:bg-muted/80 border-border"
-              }`}
-            >
-              <CheckCircle2 size={14} />
-              Reviewed
-            </button>
+                  }`}
+              >
+                <CheckCircle2 size={14} />
+                Reviewed
+              </button>
+            </div>
           </div>
-        </div>
 
-        {(selectedTags.length > 0 || selectedKB !== "all" || selectedAuthorityLevel !== "all" || selectedGovernanceStates.length > 0 || selectedReviewStatus !== "all" || selectedStates.length > 0) && (
-          <button
-            onClick={() => {
-              setSelectedTags([])
-              setSelectedKB("all")
-              setSelectedAuthorityLevel("all")
-              setSelectedGovernanceStates([])
-              setSelectedReviewStatus("all")
-              setSelectedStates([])
-            }}
-            className="text-sm text-muted-foreground hover:text-foreground underline"
-          >
-            Clear all filters
-          </button>
-        )}
+          {(selectedTags.length > 0 || selectedKB !== "all" || selectedAuthorityLevel !== "all" || selectedGovernanceStates.length > 0 || selectedReviewStatus !== "all" || selectedStates.length > 0) && (
+            <button
+              onClick={() => {
+                setSelectedTags([])
+                setSelectedKB("all")
+                setSelectedAuthorityLevel("all")
+                setSelectedGovernanceStates([])
+                setSelectedReviewStatus("all")
+                setSelectedStates([])
+              }}
+              className="text-sm text-muted-foreground hover:text-foreground underline"
+            >
+              Clear all filters
+            </button>
+          )}
         </div>
       </div>
 
@@ -1773,8 +1845,15 @@ export default function ELCloudFiles() {
 
       {/* Files List */}
       <div className="space-y-3">
+        {isLoadingList && (
+          <div className="py-20 flex flex-col items-center justify-center gap-4 bg-muted/20 rounded-xl border border-dashed border-border">
+            <Loader2 className="w-10 h-10 text-accent animate-spin" />
+            <p className="text-sm text-muted-foreground font-medium">Fetching documents from Solr...</p>
+          </div>
+        )}
+
         {/* Select All Checkbox */}
-        {paginatedFiles.length > 0 && (
+        {!isLoadingList && paginatedFiles.length > 0 && (
           <div className="flex items-center gap-2 pb-2 border-b border-border">
             <input
               type="checkbox"
@@ -1787,15 +1866,43 @@ export default function ELCloudFiles() {
             </label>
           </div>
         )}
-        
-        {paginatedFiles.map((file) => (
+
+        {!isLoadingList && paginatedFiles.length === 0 && (
+          <div className="py-20 flex flex-col items-center justify-center gap-4 bg-muted/10 rounded-xl border border-dashed border-border">
+            <div className="p-4 rounded-full bg-muted/20">
+              <FileText size={40} className="text-muted-foreground opacity-20" />
+            </div>
+            <div className="text-center">
+              <p className="text-foreground font-semibold">No files found</p>
+              <p className="text-sm text-muted-foreground mt-1">
+                {searchQuery ? "Try adjusting your search or filters" : "Start by uploading documents in URL Management"}
+              </p>
+            </div>
+            {searchQuery && (
+              <button
+                onClick={() => {
+                  setSearchQuery("")
+                  setSelectedTags([])
+                  setSelectedKB("all")
+                  setSelectedAuthorityLevel("all")
+                  setSelectedGovernanceStates([])
+                  setSelectedStates([])
+                }}
+                className="text-sm text-accent hover:underline font-medium"
+              >
+                Clear all filters
+              </button>
+            )}
+          </div>
+        )}
+
+        {!isLoadingList && paginatedFiles.map((file) => (
           <div
             key={file.id}
-            className={`p-4 rounded-lg bg-card border transition-colors ${
-              selectedFiles.has(file.id)
-                ? "border-accent bg-accent/5 hover:border-accent/80"
-                : "border-border hover:border-primary/30"
-            }`}
+            className={`p-4 rounded-lg bg-card border transition-colors ${selectedFiles.has(file.id)
+              ? "border-accent bg-accent/5 hover:border-accent/80"
+              : "border-border hover:border-primary/30"
+              }`}
           >
             <div className="flex items-start justify-between">
               <div className="flex items-start gap-4 flex-1">
@@ -1812,21 +1919,20 @@ export default function ELCloudFiles() {
                   <div className="flex items-center gap-2 mb-1 flex-wrap">
                     <h3 className="text-foreground font-semibold">{file.name}</h3>
                     {file.hasNewerVersion && (
-                      <div 
+                      <div
                         className="group relative"
                         title="A newer version of this document exists from the same source URL"
                       >
-                        <AlertTriangle 
-                          size={16} 
-                          className="text-yellow-500 cursor-help" 
+                        <AlertTriangle
+                          size={16}
+                          className="text-yellow-500 cursor-help"
                         />
                       </div>
                     )}
                     {file.authorityLevel && (
                       <div
-                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold border ${
-                          AUTHORITY_LEVELS[file.authorityLevel].color
-                        }`}
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold border ${AUTHORITY_LEVELS[file.authorityLevel].color
+                          }`}
                         title={AUTHORITY_LEVELS[file.authorityLevel].description}
                       >
                         <span className={`w-2 h-2 rounded-full ${AUTHORITY_LEVELS[file.authorityLevel].badgeColor}`}></span>
@@ -1835,7 +1941,7 @@ export default function ELCloudFiles() {
                     )}
                     {/* Citability Badge */}
                     {computeCitability(file).isCitable ? (
-                      <span 
+                      <span
                         className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-green-500/20 text-green-600 border border-green-500/30"
                         title="Citable in RAG Answers - Click Info for details"
                       >
@@ -1843,7 +1949,7 @@ export default function ELCloudFiles() {
                         Citable
                       </span>
                     ) : (
-                      <span 
+                      <span
                         className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-gray-500/20 text-gray-500 border border-gray-500/30"
                         title="Not citable in RAG Answers - Click Info for details"
                       >
@@ -1853,7 +1959,7 @@ export default function ELCloudFiles() {
                     )}
                     {/* Red Flag - Needs Human Review */}
                     {file.needsHumanReview && (
-                      <div 
+                      <div
                         className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-semibold bg-red-500/20 text-red-600 border border-red-500/30 cursor-pointer hover:bg-red-500/30 transition-colors animate-pulse"
                         title={file.reviewReason || "AI classification needs human review"}
                         onClick={() => handleEditFile(file)}
@@ -1870,7 +1976,7 @@ export default function ELCloudFiles() {
                     <span>{file.size}</span>
                     <span>{file.uploadedDate}</span>
                   </div>
-                  
+
                   {/* Tax Year Applicability Section - PRIMARY VALIDITY */}
                   {(file.taxYear || file.appliesToTaxYears || file.effectiveFrom || file.effectiveTo || file.appliesToJurisdictions || file.replacedBy || file.supersededBy) && (
                     <div className="mb-3 p-2.5 rounded-lg bg-accent/5 border border-accent/20">
@@ -1895,7 +2001,7 @@ export default function ELCloudFiles() {
                             </span>
                           </div>
                         ) : null}
-                        
+
                         {/* Applies To Jurisdictions */}
                         {file.appliesToJurisdictions && file.appliesToJurisdictions.length > 0 && (
                           <div className="flex items-center gap-2 flex-wrap">
@@ -1912,7 +2018,7 @@ export default function ELCloudFiles() {
                             </div>
                           </div>
                         )}
-                        
+
                         {/* Revision Metadata - SECONDARY (not validity) */}
                         {(file.effectiveFrom || file.effectiveTo) && (
                           <div className="flex flex-wrap items-center gap-3 pt-1.5 mt-1.5 border-t border-border/30">
@@ -1929,7 +2035,7 @@ export default function ELCloudFiles() {
                             )}
                           </div>
                         )}
-                        
+
                         {/* Superseded By / Replaced By */}
                         {(file.supersededBy || file.replacedBy) && (
                           <div className="flex items-center gap-1.5">
@@ -1968,7 +2074,7 @@ export default function ELCloudFiles() {
                       )}
                     </div>
                   )}
-                  
+
                   {/* Source URL Display */}
                   {file.sourceUrl && (
                     <div className="mb-3">
@@ -1995,7 +2101,7 @@ export default function ELCloudFiles() {
                       )}
                     </div>
                   )}
-                  
+
                   {/* Knowledge Base Badge */}
                   {file.knowledgeBaseName && (
                     <div className="mb-2">
@@ -2005,7 +2111,7 @@ export default function ELCloudFiles() {
                       </span>
                     </div>
                   )}
-                  
+
                   <div className="flex flex-wrap gap-2">
                     {file.tags.map((tag) => (
                       <span key={tag} className="px-2 py-1 rounded-full text-xs bg-primary/20 text-primary">
@@ -2013,7 +2119,7 @@ export default function ELCloudFiles() {
                       </span>
                     ))}
                   </div>
-                  
+
                   {/* RAG Pipeline Visibility - Collapsible Section */}
                   {(file.lastCrawled || file.chunkCount !== undefined || file.embeddingModel || file.tokensIndexed !== undefined) && (
                     <div className="mt-4 border-t border-border pt-3">
@@ -2031,7 +2137,7 @@ export default function ELCloudFiles() {
                           <ChevronDown size={16} className="text-muted-foreground" />
                         )}
                       </button>
-                      
+
                       {expandedRagFiles.has(file.id) && (
                         <div className="mt-3 p-3 rounded-lg bg-muted/20 border border-border/50 space-y-2.5">
                           {file.lastCrawled && (
@@ -2064,9 +2170,8 @@ export default function ELCloudFiles() {
                           {file.ragErrors !== undefined && (
                             <div className="flex items-start justify-between text-xs">
                               <span className="text-muted-foreground font-medium">Errors:</span>
-                              <span className={`font-medium ${
-                                file.ragErrors === "0" ? "text-green-500" : "text-yellow-500"
-                              }`}>
+                              <span className={`font-medium ${file.ragErrors === "0" ? "text-green-500" : "text-yellow-500"
+                                }`}>
                                 {file.ragErrors}
                               </span>
                             </div>
@@ -2098,9 +2203,8 @@ export default function ELCloudFiles() {
                         [file.id]: !prev[file.id],
                       }))
                     }}
-                    className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors flex items-center gap-1.5 border ${
-                      getGovernanceStateBadgeClass(file.governanceState)
-                    }`}
+                    className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors flex items-center gap-1.5 border ${getGovernanceStateBadgeClass(file.governanceState)
+                      }`}
                     title="Click to change governance state"
                   >
                     <span>{file.governanceState || "Draft"}</span>
@@ -2116,11 +2220,10 @@ export default function ELCloudFiles() {
                           <button
                             key={state}
                             onClick={() => updateGovernanceState(file.id, state)}
-                            className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium transition-colors ${
-                              file.governanceState === state
-                                ? `${GOVERNANCE_STATE_STYLES[state].badge}`
-                                : "text-foreground/80 hover:bg-muted/60"
-                            }`}
+                            className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium transition-colors ${file.governanceState === state
+                              ? `${GOVERNANCE_STATE_STYLES[state].badge}`
+                              : "text-foreground/80 hover:bg-muted/60"
+                              }`}
                           >
                             <span>{state}</span>
                             {file.governanceState === state && <Check size={14} className="ml-auto" />}
@@ -2138,9 +2241,8 @@ export default function ELCloudFiles() {
                       setErrorDetailsFile(file)
                     }
                   }}
-                  className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors flex items-center gap-1.5 ${
-                    getStatusBadgeClass(file.syncStatus, file.indexStatus)
-                  }`}
+                  className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors flex items-center gap-1.5 ${getStatusBadgeClass(file.syncStatus, file.indexStatus)
+                    }`}
                   title={
                     file.syncStatus === "sync_failed" || file.indexStatus === "index_failed"
                       ? "Click to view error details"
@@ -2166,7 +2268,7 @@ export default function ELCloudFiles() {
                   <Download size={18} className="text-muted-foreground" />
                 </button>
                 <button
-                  onClick={() => deleteFile(file.id)}
+                  onClick={() => handleDeleteFile(file.id)}
                   className="p-2 rounded-lg hover:bg-destructive/20 transition-colors"
                 >
                   <Trash2 size={18} className="text-destructive" />
@@ -2191,11 +2293,10 @@ export default function ELCloudFiles() {
               <button
                 key={page}
                 onClick={() => goToPage(page)}
-                className={`px-3 py-1 rounded-lg font-medium transition-colors ${
-                  currentPage === page
-                    ? "bg-accent text-accent-foreground"
-                    : "bg-card border border-border hover:bg-muted text-foreground"
-                }`}
+                className={`px-3 py-1 rounded-lg font-medium transition-colors ${currentPage === page
+                  ? "bg-accent text-accent-foreground"
+                  : "bg-card border border-border hover:bg-muted text-foreground"
+                  }`}
               >
                 {page}
               </button>
@@ -2227,7 +2328,7 @@ export default function ELCloudFiles() {
                 <X size={20} className="text-muted-foreground" />
               </button>
             </div>
-            
+
             <div className="space-y-4">
               <div>
                 <h3 className="text-sm font-semibold text-foreground mb-2">{errorDetailsFile.name}</h3>
@@ -2296,36 +2397,33 @@ export default function ELCloudFiles() {
                 <div className="space-y-2 text-sm">
                   <div className="flex items-center justify-between">
                     <span className="text-foreground">Governance State:</span>
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${
-                      getGovernanceStateBadgeClass(errorDetailsFile.governanceState)
-                    }`}>
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${getGovernanceStateBadgeClass(errorDetailsFile.governanceState)
+                      }`}>
                       {errorDetailsFile.governanceState || "Draft"}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-foreground">Sync Status:</span>
-                    <span className={`font-semibold ${
-                      errorDetailsFile.syncStatus === "synced" ? "text-green-500" :
+                    <span className={`font-semibold ${errorDetailsFile.syncStatus === "synced" ? "text-green-500" :
                       errorDetailsFile.syncStatus === "syncing" ? "text-accent" :
-                      "text-destructive"
-                    }`}>
+                        "text-destructive"
+                      }`}>
                       {errorDetailsFile.syncStatus === "synced" ? "Synced" :
-                       errorDetailsFile.syncStatus === "syncing" ? "Syncing" :
-                       "Sync Failed"}
+                        errorDetailsFile.syncStatus === "syncing" ? "Syncing" :
+                          "Sync Failed"}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-foreground">Index Status:</span>
-                    <span className={`font-semibold ${
-                      errorDetailsFile.indexStatus === "indexed" ? "text-green-500" :
+                    <span className={`font-semibold ${errorDetailsFile.indexStatus === "indexed" ? "text-green-500" :
                       errorDetailsFile.indexStatus === "indexing" ? "text-accent" :
-                      errorDetailsFile.indexStatus === "index_failed" ? "text-destructive" :
-                      "text-yellow-500"
-                    }`}>
+                        errorDetailsFile.indexStatus === "index_failed" ? "text-destructive" :
+                          "text-yellow-500"
+                      }`}>
                       {errorDetailsFile.indexStatus === "indexed" ? "Indexed" :
-                       errorDetailsFile.indexStatus === "indexing" ? "Indexing..." :
-                       errorDetailsFile.indexStatus === "index_failed" ? "Index Failed" :
-                       "Not Indexed"}
+                        errorDetailsFile.indexStatus === "indexing" ? "Indexing..." :
+                          errorDetailsFile.indexStatus === "index_failed" ? "Index Failed" :
+                            "Not Indexed"}
                     </span>
                   </div>
                 </div>
@@ -2421,13 +2519,12 @@ export default function ELCloudFiles() {
                       const correspondingLine = diffContent.version2[index]
                       const isChanged = line !== correspondingLine && correspondingLine !== undefined
                       const isDeleted = correspondingLine === undefined
-                      
+
                       return (
                         <div
                           key={index}
-                          className={`flex items-start gap-2 ${
-                            isChanged || isDeleted ? "bg-yellow-500/20" : ""
-                          }`}
+                          className={`flex items-start gap-2 ${isChanged || isDeleted ? "bg-yellow-500/20" : ""
+                            }`}
                         >
                           <span className="text-muted-foreground w-8 text-right select-none">
                             {index + 1}
@@ -2451,13 +2548,12 @@ export default function ELCloudFiles() {
                       const correspondingLine = diffContent.version1[index]
                       const isChanged = line !== correspondingLine && correspondingLine !== undefined
                       const isAdded = correspondingLine === undefined
-                      
+
                       return (
                         <div
                           key={index}
-                          className={`flex items-start gap-2 ${
-                            isChanged || isAdded ? "bg-green-500/20" : ""
-                          }`}
+                          className={`flex items-start gap-2 ${isChanged || isAdded ? "bg-green-500/20" : ""
+                            }`}
                         >
                           <span className="text-muted-foreground w-8 text-right select-none">
                             {index + 1}
@@ -2603,11 +2699,10 @@ export default function ELCloudFiles() {
                             appliesToJurisdictions: newJurisdictions.length > 0 ? newJurisdictions : undefined,
                           }))
                         }}
-                        className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                          editFormData.appliesToJurisdictions?.includes(jurisdiction)
-                            ? "bg-accent text-accent-foreground"
-                            : "bg-muted text-foreground hover:bg-muted/80"
-                        }`}
+                        className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${editFormData.appliesToJurisdictions?.includes(jurisdiction)
+                          ? "bg-accent text-accent-foreground"
+                          : "bg-muted text-foreground hover:bg-muted/80"
+                          }`}
                       >
                         {jurisdiction.charAt(0).toUpperCase() + jurisdiction.slice(1)}
                         {editFormData.appliesToJurisdictions?.includes(jurisdiction) && " ✓"}
@@ -2762,67 +2857,66 @@ export default function ELCloudFiles() {
               </div>
             </div>
 
-              {/* Authority Level Override - Human-in-the-loop */}
-              <div className="p-3 rounded-lg bg-blue-500/5 border border-blue-500/20">
-                <h4 className="text-xs font-semibold text-blue-600 uppercase mb-3 flex items-center gap-2">
-                  <FileCheck size={14} />
-                  Authority Level Override (Human-in-the-loop)
-                </h4>
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-sm font-medium text-foreground mb-2">
-                      Authority Level
-                    </label>
-                    <div className="flex flex-wrap gap-2">
-                      {Object.entries(AUTHORITY_LEVELS).map(([level, info]) => (
-                        <button
-                          key={level}
-                          type="button"
-                          onClick={() => setEditFormData(prev => ({ 
-                            ...prev, 
-                            authorityLevel: Number(level) as 1 | 2 | 3 | 4 | 5 | 6 
-                          }))}
-                          className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors border ${
-                            editFormData.authorityLevel === Number(level)
-                              ? `${info.color} border-current ring-2 ring-offset-1`
-                              : "bg-muted text-foreground hover:bg-muted/80 border-border"
-                          }`}
-                          title={info.description}
-                        >
-                          Level {level}
-                        </button>
-                      ))}
-                    </div>
-                    {editFormData.authorityLevel !== editingFile?.authorityLevel && (
-                      <p className="text-xs text-amber-600 mt-2 flex items-center gap-1">
-                        <AlertTriangle size={12} />
-                        Changing from Level {editingFile?.authorityLevel || "unset"} to Level {editFormData.authorityLevel}
-                      </p>
-                    )}
-                  </div>
-                  
-                  {editFormData.authorityLevel !== editingFile?.authorityLevel && (
-                    <div>
-                      <label className="block text-sm font-medium text-foreground mb-2">
-                        Reason for Override <span className="text-destructive">*</span>
-                      </label>
-                      <textarea
-                        value={editFormData.authorityLevelRationale || ""}
-                        onChange={(e) => setEditFormData(prev => ({ 
-                          ...prev, 
-                          authorityLevelRationale: e.target.value 
+            {/* Authority Level Override - Human-in-the-loop */}
+            <div className="p-3 rounded-lg bg-blue-500/5 border border-blue-500/20">
+              <h4 className="text-xs font-semibold text-blue-600 uppercase mb-3 flex items-center gap-2">
+                <FileCheck size={14} />
+                Authority Level Override (Human-in-the-loop)
+              </h4>
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-2">
+                    Authority Level
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {Object.entries(AUTHORITY_LEVELS).map(([level, info]) => (
+                      <button
+                        key={level}
+                        type="button"
+                        onClick={() => setEditFormData(prev => ({
+                          ...prev,
+                          authorityLevel: Number(level) as 1 | 2 | 3 | 4 | 5 | 6
                         }))}
-                        placeholder="Explain why you are overriding the AI classification..."
-                        rows={2}
-                        className="w-full px-3 py-2 rounded-lg bg-input border border-amber-500/30 text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-amber-500"
-                      />
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Required. This will be logged in the governance audit trail.
-                      </p>
-                    </div>
+                        className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors border ${editFormData.authorityLevel === Number(level)
+                          ? `${info.color} border-current ring-2 ring-offset-1`
+                          : "bg-muted text-foreground hover:bg-muted/80 border-border"
+                          }`}
+                        title={info.description}
+                      >
+                        Level {level}
+                      </button>
+                    ))}
+                  </div>
+                  {editFormData.authorityLevel !== editingFile?.authorityLevel && (
+                    <p className="text-xs text-amber-600 mt-2 flex items-center gap-1">
+                      <AlertTriangle size={12} />
+                      Changing from Level {editingFile?.authorityLevel || "unset"} to Level {editFormData.authorityLevel}
+                    </p>
                   )}
                 </div>
+
+                {editFormData.authorityLevel !== editingFile?.authorityLevel && (
+                  <div>
+                    <label className="block text-sm font-medium text-foreground mb-2">
+                      Reason for Override <span className="text-destructive">*</span>
+                    </label>
+                    <textarea
+                      value={editFormData.authorityLevelRationale || ""}
+                      onChange={(e) => setEditFormData(prev => ({
+                        ...prev,
+                        authorityLevelRationale: e.target.value
+                      }))}
+                      placeholder="Explain why you are overriding the AI classification..."
+                      rows={2}
+                      className="w-full px-3 py-2 rounded-lg bg-input border border-amber-500/30 text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Required. This will be logged in the governance audit trail.
+                    </p>
+                  </div>
+                )}
               </div>
+            </div>
 
             <div className="flex gap-3 mt-6">
               <button
@@ -2915,18 +3009,17 @@ export default function ELCloudFiles() {
                   <Cpu size={16} className="text-accent" />
                   AI Classification
                 </h3>
-                <div className={`p-4 rounded-lg border space-y-3 text-sm ${
-                  detailsFile.needsHumanReview 
-                    ? "bg-red-500/5 border-red-500/20" 
-                    : "bg-muted/30 border-border/50"
-                }`}>
+                <div className={`p-4 rounded-lg border space-y-3 text-sm ${detailsFile.needsHumanReview
+                  ? "bg-red-500/5 border-red-500/20"
+                  : "bg-muted/30 border-border/50"
+                  }`}>
                   {/* Confidence Score */}
                   {detailsFile.classificationConfidence !== undefined && (
                     <div className="flex items-center gap-3">
                       <span className="text-muted-foreground font-medium min-w-[120px]">Confidence:</span>
                       <div className="flex items-center gap-2 flex-1">
                         <div className="flex-1 max-w-[150px] h-2.5 bg-muted rounded-full overflow-hidden">
-                          <div 
+                          <div
                             className={`h-full rounded-full transition-all ${getConfidenceColor(detailsFile.classificationConfidence)}`}
                             style={{ width: `${detailsFile.classificationConfidence}%` }}
                           />
@@ -2937,7 +3030,7 @@ export default function ELCloudFiles() {
                       </div>
                     </div>
                   )}
-                  
+
                   {/* Needs Review Alert */}
                   {detailsFile.needsHumanReview && (
                     <div className="flex items-start gap-2 p-3 rounded-lg bg-red-500/10 border border-red-500/20">
@@ -2959,7 +3052,7 @@ export default function ELCloudFiles() {
                       </div>
                     </div>
                   )}
-                  
+
                   {/* Reviewed Status */}
                   {detailsFile.reviewedAt && !detailsFile.needsHumanReview && (
                     <div className="flex items-center gap-2 text-green-600 pt-2 border-t border-border/50">
@@ -2982,9 +3075,8 @@ export default function ELCloudFiles() {
                   {detailsFile.authorityLevel && (
                     <div className="flex items-center gap-3">
                       <div
-                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-semibold border ${
-                          AUTHORITY_LEVELS[detailsFile.authorityLevel].color
-                        }`}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-semibold border ${AUTHORITY_LEVELS[detailsFile.authorityLevel].color
+                          }`}
                       >
                         <span className={`w-2 h-2 rounded-full ${AUTHORITY_LEVELS[detailsFile.authorityLevel].badgeColor}`}></span>
                         <span>Level {detailsFile.authorityLevel}: {AUTHORITY_LEVELS[detailsFile.authorityLevel].label}</span>
@@ -3021,7 +3113,7 @@ export default function ELCloudFiles() {
                       </div>
                     )}
                   </div>
-                  
+
                   {/* Reasons list */}
                   <div className="pt-2 border-t border-border/50">
                     <p className="text-xs text-muted-foreground font-medium mb-2">Reason:</p>
@@ -3077,13 +3169,12 @@ export default function ELCloudFiles() {
                   {detailsFile.parsingQuality && (
                     <div className="flex items-center gap-2">
                       <span className="text-muted-foreground font-medium min-w-[140px]">Parsing Quality:</span>
-                      <span className={`px-2 py-0.5 rounded text-xs font-medium border ${
-                        detailsFile.parsingQuality === "ok" 
-                          ? "bg-green-500/20 text-green-600 border-green-500/30" 
-                          : detailsFile.parsingQuality === "partial"
-                            ? "bg-amber-500/20 text-amber-600 border-amber-500/30"
-                            : "bg-red-500/20 text-red-600 border-red-500/30"
-                      }`}>
+                      <span className={`px-2 py-0.5 rounded text-xs font-medium border ${detailsFile.parsingQuality === "ok"
+                        ? "bg-green-500/20 text-green-600 border-green-500/30"
+                        : detailsFile.parsingQuality === "partial"
+                          ? "bg-amber-500/20 text-amber-600 border-amber-500/30"
+                          : "bg-red-500/20 text-red-600 border-red-500/30"
+                        }`}>
                         {detailsFile.parsingQuality === "ok" ? "OK" : detailsFile.parsingQuality === "partial" ? "Partial" : "Failed"}
                       </span>
                     </div>
@@ -3262,11 +3353,10 @@ export default function ELCloudFiles() {
                       {detailsFile.errorHistory.map((error, index) => (
                         <div key={index} className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 space-y-2">
                           <div className="flex items-center gap-2 flex-wrap">
-                            <span className={`text-xs font-semibold px-2 py-0.5 rounded ${
-                              error.severity === "critical" ? "bg-destructive/20 text-destructive" :
+                            <span className={`text-xs font-semibold px-2 py-0.5 rounded ${error.severity === "critical" ? "bg-destructive/20 text-destructive" :
                               error.severity === "warning" ? "bg-yellow-500/20 text-yellow-600" :
-                              "bg-blue-500/20 text-blue-600"
-                            }`}>
+                                "bg-blue-500/20 text-blue-600"
+                              }`}>
                               {error.severity.toUpperCase()}
                             </span>
                             <span className="text-xs text-muted-foreground capitalize">{error.type.replace("_", " ")}</span>

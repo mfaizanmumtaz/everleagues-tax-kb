@@ -8,11 +8,11 @@ from typing import Dict, Any, List, Optional
 class ParseResult:
     """
     Result of a file parsing operation.
-    
+
     Contains extracted text, metadata, and processing information.
     Designed to provide comprehensive information about the extraction
     for downstream processing and quality assessment.
-    
+
     Attributes:
         text: Combined text content from all pages/sections
         success: Whether the extraction completed successfully
@@ -28,7 +28,7 @@ class ParseResult:
         word_count: Total word count of extracted text
         source_filename: Original filename that was parsed
     """
-    
+
     text: str
     success: bool
     file_type: str
@@ -42,38 +42,38 @@ class ParseResult:
     char_count: int = 0
     word_count: int = 0
     source_filename: str = ""
-    
+
     def __post_init__(self):
         """Calculate char_count and word_count if not provided."""
         if self.text and self.char_count == 0:
             self.char_count = len(self.text)
         if self.text and self.word_count == 0:
             self.word_count = len(self.text.split())
-    
+
     @property
     def is_empty(self) -> bool:
         """Check if the extracted text is empty or whitespace only."""
         return not self.text or not self.text.strip()
-    
+
     @property
     def has_errors(self) -> bool:
         """Check if there were any errors during extraction."""
         return len(self.errors) > 0
-    
+
     def get_page(self, index: int) -> Optional[str]:
         """
         Get text content for a specific page.
-        
+
         Args:
             index: Zero-based page index
-            
+
         Returns:
             Page text content or None if index is out of range
         """
         if 0 <= index < len(self.pages):
             return self.pages[index]
         return None
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert ParseResult to dictionary for serialization."""
         return {
@@ -93,17 +93,19 @@ class ParseResult:
             "is_empty": self.is_empty,
             "has_errors": self.has_errors,
         }
-    
+
     @classmethod
-    def empty(cls, filename: str = "", file_type: str = "", error: str = "") -> "ParseResult":
+    def empty(
+        cls, filename: str = "", file_type: str = "", error: str = ""
+    ) -> "ParseResult":
         """
         Create an empty ParseResult for failed extractions.
-        
+
         Args:
             filename: Original filename
             file_type: File extension
             error: Error message to include
-            
+
         Returns:
             ParseResult with empty text and success=False
         """

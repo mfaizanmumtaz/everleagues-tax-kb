@@ -1,6 +1,5 @@
 """Shared dependencies for FastAPI application."""
 
-from typing import Generator
 from .services.solr_service import SolrService, get_solr_service
 from .services.search_service import SearchService, get_search_service
 from .services.document_service import DocumentService, get_document_service
@@ -31,4 +30,3 @@ def get_chunks() -> ChunkService:
 def get_embeddings() -> EmbeddingService:
     """Dependency to get embedding service."""
     return get_embedding_service()
-

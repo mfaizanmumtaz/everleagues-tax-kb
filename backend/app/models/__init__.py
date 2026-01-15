@@ -7,7 +7,7 @@ from .document import (
     DocumentListResponse,
     GovernanceStateUpdate,
 )
-from .chunk import ChunkCreate, ChunkUpdate, ChunkResponse, ChunkListResponse
+# from .chunk import ChunkCreate, ChunkUpdate, ChunkResponse, ChunkListResponse
 from .search import (
     SearchRequest,
     SearchQualityControls,
@@ -30,9 +30,9 @@ __all__ = [
     "GovernanceStateUpdate",
     # Chunk
     "ChunkCreate",
-    "ChunkUpdate",
-    "ChunkResponse",
-    "ChunkListResponse",
+    # "ChunkUpdate",
+    # "ChunkResponse",
+    # "ChunkListResponse",
     # Search
     "SearchRequest",
     "SearchQualityControls",
@@ -43,4 +43,3 @@ __all__ = [
     "FileUploadMetadata",
     "FileUploadResponse",
 ]
-

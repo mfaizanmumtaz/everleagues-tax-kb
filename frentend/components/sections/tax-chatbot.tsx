@@ -1,7 +1,9 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Send, Settings, FileText, Database, ChevronDown, ChevronUp, ExternalLink, BookOpen, BarChart3, Globe, Calendar, Layers, Hash, ArrowRight, SlidersHorizontal } from "lucide-react"
+import { ragSearch, getDashboardStats, ApiError } from "@/lib/api"
+import type { RetrievedChunk as APIChunk, SourceDocument as APISource } from "@/lib/types"
 
 interface RetrievedChunk {
   id: string
@@ -51,7 +53,7 @@ interface Message {
 
 const STATES = ["NY", "CA", "NJ", "CT", "MA", "PA"]
 const CITIES = ["NYC", "Philadelphia", "Los Angeles", "Chicago", "Houston", "Phoenix", "San Antonio", "San Diego", "Dallas", "San Jose"]
-const CATEGORIES = ["forms", "instructions", "faq", "code", "regulations", "bulletins", "sales-tax"]
+const DOC_TYPES = ["form", "instructions", "publication", "schedule", "regulation", "ruling", "notice", "faq", "guide", "other"]
 
 const RANDOM_SOURCE_NAMES = [
   "Tax Form 1040 Guide",
@@ -152,13 +154,13 @@ export default function TaxChatbot() {
   const [selectedJurisdiction, setSelectedJurisdiction] = useState<"federal" | "state" | "local" | null>(null)
   const [selectedState, setSelectedState] = useState<string | null>(null)
   const [selectedCity, setSelectedCity] = useState<string | null>(null)
-  const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
+  const [selectedDocType, setSelectedDocType] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [expandedSourceId, setExpandedSourceId] = useState<string | null>(null)
   const [showRetrievalResults, setShowRetrievalResults] = useState<Record<string, boolean>>({})
   const [retrievalResults, setRetrievalResults] = useState<Record<string, RetrievedChunk[]>>({})
   const [showLineage, setShowLineage] = useState<Record<string, boolean>>({})
-  
+
   // Search Quality Controls State
   const [retrievalMode, setRetrievalMode] = useState<"balanced" | "high_recall" | "high_precision">("balanced")
   const [authorityWeightControl, setAuthorityWeightControl] = useState<"strict" | "balanced" | "broad">("balanced")
@@ -214,7 +216,7 @@ export default function TaxChatbot() {
       sources.push({
         id: `random-${Date.now()}-${i}`,
         title: randomName,
-        category: selectedCategory || "general",
+        category: selectedDocType || "general",
         jurisdiction: selectedJurisdiction === "federal" ? "federal" : selectedJurisdiction === "state" ? "state" : "local",
       })
     }
@@ -226,17 +228,17 @@ export default function TaxChatbot() {
     setSelectedJurisdiction(jurisdiction)
     setSelectedState(null)
     setSelectedCity(null)
-    setSelectedCategory(null)
+    setSelectedDocType(null)
 
     const assistantMessage: Message = {
       id: Date.now().toString(),
       role: "assistant",
       content:
         jurisdiction === "federal"
-          ? "You've selected Federal jurisdiction. What category would you like to search? (forms, instructions, faq, code, regulations, bulletins)"
+          ? "You've selected Federal jurisdiction. What document type would you like to search? (form, instructions, publication, schedule, regulation, ruling, notice, faq, guide)"
           : jurisdiction === "state"
-          ? "You've selected State jurisdiction. Which state would you like to search? (NY, CA, NJ, CT, MA, PA)"
-          : "You've selected Local jurisdiction. Which city would you like to search? (NYC, Philadelphia, Los Angeles, Chicago, etc.)",
+            ? "You've selected State jurisdiction. Which state would you like to search? (NY, CA, NJ, CT, MA, PA)"
+            : "You've selected Local jurisdiction. Which city would you like to search? (NYC, Philadelphia, Los Angeles, Chicago, etc.)",
       timestamp: new Date(),
     }
     setMessages((prev) => [...prev, assistantMessage])
@@ -244,12 +246,12 @@ export default function TaxChatbot() {
 
   const handleStateSelect = (state: string) => {
     setSelectedState(state)
-    setSelectedCategory(null)
+    setSelectedDocType(null)
 
     const assistantMessage: Message = {
       id: Date.now().toString(),
       role: "assistant",
-      content: `You've selected ${state}. What category would you like to search? (forms, instructions, faq, code, regulations, bulletins, sales-tax)`,
+      content: `You've selected ${state}. What document type would you like to search? (form, instructions, publication, schedule, regulation, ruling, notice, faq, guide)`,
       timestamp: new Date(),
     }
     setMessages((prev) => [...prev, assistantMessage])
@@ -257,30 +259,29 @@ export default function TaxChatbot() {
 
   const handleCitySelect = (city: string) => {
     setSelectedCity(city)
-    setSelectedCategory(null)
+    setSelectedDocType(null)
 
     const assistantMessage: Message = {
       id: Date.now().toString(),
       role: "assistant",
-      content: `You've selected ${city}. What category would you like to search? (forms, instructions, faq, code, regulations, bulletins, sales-tax)`,
+      content: `You've selected ${city}. What document type would you like to search? (form, instructions, publication, schedule, regulation, ruling, notice, faq, guide)`,
       timestamp: new Date(),
     }
     setMessages((prev) => [...prev, assistantMessage])
   }
 
-  const handleCategorySelect = (category: string) => {
-    setSelectedCategory(category)
+  const handleDocTypeSelect = (docType: string) => {
+    setSelectedDocType(docType)
 
     const assistantMessage: Message = {
       id: Date.now().toString(),
       role: "assistant",
-      content: `Searching for ${category} in ${
-        selectedJurisdiction === "federal" 
-          ? "Federal" 
-          : selectedJurisdiction === "state"
+      content: `Searching for ${docType} in ${selectedJurisdiction === "federal"
+        ? "Federal"
+        : selectedJurisdiction === "state"
           ? `${selectedState} State`
           : `${selectedCity} Local`
-      } documents. What would you like to know?`,
+        } documents. What would you like to know?`,
       timestamp: new Date(),
     }
     setMessages((prev) => [...prev, assistantMessage])
@@ -358,18 +359,18 @@ export default function TaxChatbot() {
     // Extract unique documents from chunks
     // This creates the "Documents Used" list that appears AFTER the answer
     const documentMap = new Map<string, SourceDocument>()
-    
+
     chunks.forEach((chunk) => {
       if (!documentMap.has(chunk.documentName)) {
         // Keep original document name format (Form_1040_2024.pdf, Pub 535 Business Expenses, Rev Proc 2024-15)
         const displayTitle = chunk.documentName.includes("Pub") || chunk.documentName.includes("Rev Proc")
           ? chunk.documentName
           : chunk.documentName.replace(".pdf", "").replace(/_/g, " ")
-        
+
         documentMap.set(chunk.documentName, {
           id: `doc-${chunk.documentName}`,
           title: displayTitle,
-          category: selectedCategory || "general",
+          category: selectedDocType || "general",
           jurisdiction: chunk.jurisdiction || (selectedJurisdiction === "federal" ? "federal" : selectedJurisdiction === "state" ? "state" : "local"),
           url: chunk.sourceUrl,
           authorityLevel: chunk.authorityLevel,
@@ -382,7 +383,7 @@ export default function TaxChatbot() {
         })
       }
     })
-    
+
     // Sort by priority rank (preferred documents first)
     return Array.from(documentMap.values()).sort((a, b) => (a.priorityRank || 999) - (b.priorityRank || 999))
   }
@@ -398,38 +399,81 @@ export default function TaxChatbot() {
     }
 
     setMessages((prev) => [...prev, userMessage])
+    const queryText = inputValue
     setInputValue("")
     setIsLoading(true)
 
-    // Prepare search quality controls for API call
-    const searchQualityControls = {
-      retrieval_mode: retrievalMode,
-      authority_weight_control: authorityWeightControl,
-      semantic_lexical_balance: semanticLexicalBalance,
+    // Map frontend control values to backend values
+    const retrievalModeMap: Record<string, "hybrid" | "vector" | "bm25"> = {
+      balanced: "hybrid",
+      high_recall: "bm25",
+      high_precision: "vector",
     }
 
-    const filters = {
-      jurisdiction: selectedJurisdiction || undefined,
-      state: selectedState || undefined,
-      city: selectedCity || undefined,
-      category: selectedCategory ? [selectedCategory] : undefined,
+    const authorityWeightMap: Record<string, number> = {
+      strict: 0.8,
+      balanced: 0.5,
+      broad: 0.2,
     }
 
-    // TODO: Make actual API call with search quality controls
-    // await fetch('/api/search/rag', {
-    //   method: 'POST',
-    //   body: JSON.stringify({
-    //     query: inputValue,
-    //     filters,
-    //     search_quality_controls: searchQualityControls
-    //   })
-    // })
+    try {
+      // Make real API call
+      const response = await ragSearch({
+        query: queryText,
+        filters: {
+          jurisdiction: selectedJurisdiction || undefined,
+          state: selectedState || undefined,
+          city: selectedCity || undefined,
+          doc_type: selectedDocType || undefined,
+          governance_state: "Draft"
+        },
+        search_quality_controls: {
+          retrieval_mode: retrievalModeMap[retrievalMode] || "hybrid",
+          authority_weight_control: authorityWeightMap[authorityWeightControl] || 0.5,
+          semantic_lexical_balance: semanticLexicalBalance,
+          top_k: 10,
+        },
+      })
 
-    // Simulate RAG retrieval - show chunks BEFORE generating answer
-    setTimeout(() => {
-      const retrievedChunks = generateRetrievedChunks()
       const messageId = (Date.now() + 1).toString()
-      
+
+      // Map API response (snake_case) to frontend types (camelCase)
+      const retrievedChunks: RetrievedChunk[] = response.retrieved_chunks.map((chunk) => ({
+        id: chunk.id,
+        chunkId: chunk.chunk_id,
+        documentName: chunk.document_name,
+        content: chunk.content,
+        relevanceScore: chunk.relevance_score,
+        authorityLevel: chunk.authority_level as 1 | 2 | 3 | 4 | 5 | 6 | undefined,
+        priorityRank: chunk.priority_rank,
+        isPreferred: chunk.is_preferred,
+        taxYear: chunk.tax_year,
+        jurisdiction: chunk.jurisdiction,
+        state: chunk.state,
+        sourceUrl: chunk.source_url,
+        sourceDomain: chunk.source_domain,
+        paragraphNumber: chunk.paragraph_number,
+        fileVersion: chunk.file_version,
+        effectiveFrom: chunk.effective_from,
+        conflictResolutionReason: chunk.conflict_resolution_reason,
+      }))
+
+      const documentsUsed: SourceDocument[] = response.source_documents.map((doc) => ({
+        id: doc.id,
+        title: doc.title,
+        category: doc.category || selectedDocType || "general",
+        jurisdiction: doc.jurisdiction || selectedJurisdiction || "federal",
+        url: doc.url,
+        excerpt: doc.excerpt,
+        authorityLevel: doc.authority_level as 1 | 2 | 3 | 4 | 5 | 6 | undefined,
+        priorityRank: doc.priority_rank,
+        isPreferred: doc.is_preferred,
+        taxYear: doc.tax_year,
+        state: doc.state,
+        effectiveFrom: doc.effective_from,
+        conflictResolutionReason: doc.conflict_resolution_reason,
+      }))
+
       // Store retrieval results for this message
       setRetrievalResults((prev) => ({
         ...prev,
@@ -437,43 +481,60 @@ export default function TaxChatbot() {
       }))
       setShowRetrievalResults((prev) => ({
         ...prev,
-        [messageId]: true, // Show by default
+        [messageId]: true,
       }))
 
-      // Generate documents used list from chunks
-      const documentsUsed = generateDocumentsUsed(retrievedChunks)
+      // Generate response content based on results
+      let responseContent: string
+      if (retrievedChunks.length === 0) {
+        responseContent = `I couldn't find any documents matching your query "${queryText}". Try adjusting your filters or rephrasing your question.`
+      } else {
+        // Build response with inline citations
+        const snippets = retrievedChunks.slice(0, 3).map((chunk, index) =>
+          `${chunk.content.slice(0, 200)}${chunk.content.length > 200 ? "..." : ""} [${index + 1}]`
+        ).join("\n\n")
 
-      // Generate response with inline citations
-      const responseWithCitations = `Based on the retrieved documents, I found relevant information about "${userMessage.content}". Here's what I found:
-
-The standard deduction for tax year 2024 is $14,600 for single filers and $29,200 for married couples filing jointly [1]. Business expenses are deductible if the business operates to make a profit, including rent, utilities, salaries, and office supplies [2]. Revenue Procedure 2024-15 provides additional guidance on the treatment of certain business expenses [3].
-
-These documents provide the most current guidance for tax year 2024.`
+        responseContent = `Based on the retrieved documents, I found ${response.total_chunks} relevant chunk(s) for "${queryText}":\n\n${snippets}\n\n(Search completed in ${response.search_time_ms.toFixed(0)}ms using ${response.retrieval_mode} mode)`
+      }
 
       const assistantResponse: Message = {
         id: messageId,
         role: "assistant",
-        content: responseWithCitations,
+        content: responseContent,
         timestamp: new Date(),
         sources: documentsUsed,
         retrievedChunks: retrievedChunks,
       }
       setMessages((prev) => [...prev, assistantResponse])
+    } catch (error) {
+      // Handle API errors gracefully
+      const errorMessage = error instanceof ApiError
+        ? `Search failed: ${error.message}`
+        : "Search failed: Unable to connect to the server. Please check if the backend is running."
+
+      const errorResponse: Message = {
+        id: (Date.now() + 1).toString(),
+        role: "assistant",
+        content: errorMessage,
+        timestamp: new Date(),
+      }
+      setMessages((prev) => [...prev, errorResponse])
+    } finally {
       setIsLoading(false)
-    }, 800)
+    }
   }
 
-  const isInputDisabled = !selectedCategory
+  const isInputDisabled = !selectedDocType
 
   // Render message content with inline citation badges
   const renderContentWithCitations = (content: string, sources?: SourceDocument[]) => {
     if (!sources || sources.length === 0) {
       return <span>{content}</span>
     }
-    
+
     // Split content by citation patterns like [1], [2], etc.
     const parts = content.split(/(\[\d+\])/g)
-    
+
     return (
       <>
         {parts.map((part, index) => {
@@ -499,31 +560,48 @@ These documents provide the most current guidance for tax year 2024.`
     )
   }
 
-  // Mock Knowledge Base Statistics Data
-  const kbStatistics = {
-    totalDocumentsIndexed: 1247,
-    totalChunks: 384256,
+  // Knowledge Base Statistics - fetched from API
+  const [kbStatistics, setKbStatistics] = useState({
+    totalDocumentsIndexed: 0,
+    totalChunks: 0,
     authorityLevelBreakdown: {
-      level1: 142,
-      level2: 523,
-      level3: 198,
-      level4: 287,
-      level5: 67,
-      level6: 30,
+      level1: 0,
+      level2: 0,
+      level3: 0,
+      level4: 0,
+      level5: 0,
+      level6: 0,
     },
     sourcesDistribution: {
-      irsGov: 856,
-      stateSites: 234,
-      lawCornell: 89,
-      govInfo: 68,
+      irsGov: 0,
+      stateSites: 0,
+      lawCornell: 0,
+      govInfo: 0,
     },
     freshnessStats: {
-      last24h: 12,
-      last7Days: 87,
-      last30Days: 234,
-      staleOver30Days: 27,
+      last24h: 0,
+      last7Days: 0,
+      last30Days: 0,
+      staleOver30Days: 0,
     },
-  }
+  })
+
+  // Fetch Knowledge Base Statistics on mount
+  useEffect(() => {
+    const fetchStats = async () => {
+      try {
+        const stats = await getDashboardStats()
+        setKbStatistics(prev => ({
+          ...prev,
+          totalDocumentsIndexed: stats.total_documents,
+          totalChunks: stats.total_chunks,
+        }))
+      } catch {
+        // Silently handle errors - backend may not be running
+      }
+    }
+    fetchStats()
+  }, [])
 
   return (
     <div className="space-y-6">
@@ -543,12 +621,11 @@ These documents provide the most current guidance for tax year 2024.`
               <div key={message.id} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
                 <div className="w-full max-w-2xl">
                   <div
-                    className={`px-4 py-2 rounded-lg ${
-                      message.role === "user" ? "bg-accent text-accent-foreground" : "bg-muted text-foreground"
-                    }`}
+                    className={`px-4 py-2 rounded-lg ${message.role === "user" ? "bg-accent text-accent-foreground" : "bg-muted text-foreground"
+                      }`}
                   >
                     <p className="text-sm whitespace-pre-wrap">
-                      {message.role === "assistant" && message.sources 
+                      {message.role === "assistant" && message.sources
                         ? renderContentWithCitations(message.content, message.sources)
                         : message.content
                       }
@@ -637,11 +714,10 @@ These documents provide the most current guidance for tax year 2024.`
                           {message.retrievedChunks.map((chunk) => (
                             <div
                               key={chunk.id}
-                              className={`p-3 rounded-lg bg-card border ${
-                                chunk.isPreferred
-                                  ? "border-green-500/50 bg-green-500/5"
-                                  : "border-border"
-                              }`}
+                              className={`p-3 rounded-lg bg-card border ${chunk.isPreferred
+                                ? "border-green-500/50 bg-green-500/5"
+                                : "border-border"
+                                }`}
                             >
                               <div className="flex items-start justify-between mb-2">
                                 <div className="flex items-center gap-2 flex-wrap">
@@ -736,11 +812,10 @@ These documents provide the most current guidance for tax year 2024.`
                         {message.sources.map((source) => (
                           <div
                             key={source.id}
-                            className={`flex items-center justify-between p-2 rounded-lg border ${
-                              source.isPreferred
-                                ? "bg-green-500/10 border-green-500/50"
-                                : "bg-card border-border/50"
-                            }`}
+                            className={`flex items-center justify-between p-2 rounded-lg border ${source.isPreferred
+                              ? "bg-green-500/10 border-green-500/50"
+                              : "bg-card border-border/50"
+                              }`}
                           >
                             <div className="flex items-center gap-2 flex-1">
                               <FileText size={14} className="text-accent" />
@@ -839,11 +914,10 @@ These documents provide the most current guidance for tax year 2024.`
                           {message.retrievedChunks.map((chunk) => (
                             <div
                               key={chunk.id}
-                              className={`p-3 rounded-lg bg-card border ${
-                                chunk.isPreferred
-                                  ? "border-green-500/50 bg-green-500/5"
-                                  : "border-border"
-                              }`}
+                              className={`p-3 rounded-lg bg-card border ${chunk.isPreferred
+                                ? "border-green-500/50 bg-green-500/5"
+                                : "border-border"
+                                }`}
                             >
                               <div className="flex items-start gap-2 flex-wrap">
                                 {/* Priority Rank */}
@@ -862,7 +936,7 @@ These documents provide the most current guidance for tax year 2024.`
                                     <ArrowRight size={12} className="text-muted-foreground mt-0.5" />
                                   </>
                                 )}
-                                
+
                                 {/* Source Domain */}
                                 {chunk.sourceDomain && (
                                   <>
@@ -880,7 +954,7 @@ These documents provide the most current guidance for tax year 2024.`
                                     <ArrowRight size={12} className="text-muted-foreground mt-0.5" />
                                   </>
                                 )}
-                                
+
                                 {/* File Name */}
                                 <div className="flex items-center gap-1.5">
                                   <FileText size={14} className="text-accent" />
@@ -894,7 +968,7 @@ These documents provide the most current guidance for tax year 2024.`
                                   )}
                                 </div>
                                 <ArrowRight size={12} className="text-muted-foreground mt-0.5" />
-                                
+
                                 {/* Chunk ID */}
                                 <div className="flex items-center gap-1.5">
                                   <Database size={14} className="text-blue-600" />
@@ -902,7 +976,7 @@ These documents provide the most current guidance for tax year 2024.`
                                     {chunk.chunkId.replace("chunk_", "Chunk ")}
                                   </span>
                                 </div>
-                                
+
                                 {/* Paragraph Number */}
                                 {chunk.paragraphNumber && (
                                   <>
@@ -916,7 +990,7 @@ These documents provide the most current guidance for tax year 2024.`
                                   </>
                                 )}
                               </div>
-                              
+
                               {/* Additional Metadata */}
                               <div className="flex items-center gap-3 mt-2 pt-2 border-t border-border/50 flex-wrap">
                                 {chunk.taxYear && (
@@ -1022,31 +1096,28 @@ These documents provide the most current guidance for tax year 2024.`
               <div className="grid grid-cols-3 gap-2">
                 <button
                   onClick={() => handleJurisdictionSelect("federal")}
-                  className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                    selectedJurisdiction === "federal"
-                      ? "bg-accent text-accent-foreground"
-                      : "bg-muted text-foreground hover:bg-muted/80"
-                  }`}
+                  className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${selectedJurisdiction === "federal"
+                    ? "bg-accent text-accent-foreground"
+                    : "bg-muted text-foreground hover:bg-muted/80"
+                    }`}
                 >
                   Federal
                 </button>
                 <button
                   onClick={() => handleJurisdictionSelect("state")}
-                  className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                    selectedJurisdiction === "state"
-                      ? "bg-accent text-accent-foreground"
-                      : "bg-muted text-foreground hover:bg-muted/80"
-                  }`}
+                  className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${selectedJurisdiction === "state"
+                    ? "bg-accent text-accent-foreground"
+                    : "bg-muted text-foreground hover:bg-muted/80"
+                    }`}
                 >
                   State
                 </button>
                 <button
                   onClick={() => handleJurisdictionSelect("local")}
-                  className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                    selectedJurisdiction === "local"
-                      ? "bg-accent text-accent-foreground"
-                      : "bg-muted text-foreground hover:bg-muted/80"
-                  }`}
+                  className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${selectedJurisdiction === "local"
+                    ? "bg-accent text-accent-foreground"
+                    : "bg-muted text-foreground hover:bg-muted/80"
+                    }`}
                 >
                   Local
                 </button>
@@ -1062,11 +1133,10 @@ These documents provide the most current guidance for tax year 2024.`
                     <button
                       key={state}
                       onClick={() => handleStateSelect(state)}
-                      className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                        selectedState === state
-                          ? "bg-accent text-accent-foreground"
-                          : "bg-muted text-foreground hover:bg-muted/80"
-                      }`}
+                      className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${selectedState === state
+                        ? "bg-accent text-accent-foreground"
+                        : "bg-muted text-foreground hover:bg-muted/80"
+                        }`}
                     >
                       {state}
                     </button>
@@ -1084,11 +1154,10 @@ These documents provide the most current guidance for tax year 2024.`
                     <button
                       key={city}
                       onClick={() => handleCitySelect(city)}
-                      className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                        selectedCity === city
-                          ? "bg-accent text-accent-foreground"
-                          : "bg-muted text-foreground hover:bg-muted/80"
-                      }`}
+                      className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${selectedCity === city
+                        ? "bg-accent text-accent-foreground"
+                        : "bg-muted text-foreground hover:bg-muted/80"
+                        }`}
                     >
                       {city}
                     </button>
@@ -1097,22 +1166,21 @@ These documents provide the most current guidance for tax year 2024.`
               </div>
             )}
 
-            {/* Category Selection (if jurisdiction is selected) */}
+            {/* Document Type Selection (if jurisdiction is selected) */}
             {selectedJurisdiction && (
               <div className="space-y-2 mt-4">
-                <p className="text-xs font-semibold text-muted-foreground uppercase">Category</p>
+                <p className="text-xs font-semibold text-muted-foreground uppercase">Document Type</p>
                 <div className="space-y-2">
-                  {CATEGORIES.map((category) => (
+                  {DOC_TYPES.map((docType: string) => (
                     <button
-                      key={category}
-                      onClick={() => handleCategorySelect(category)}
-                      className={`w-full px-3 py-2 rounded-lg text-sm font-medium transition-colors text-left capitalize ${
-                        selectedCategory === category
-                          ? "bg-accent text-accent-foreground"
-                          : "bg-muted text-foreground hover:bg-muted/80"
-                      }`}
+                      key={docType}
+                      onClick={() => handleDocTypeSelect(docType)}
+                      className={`w-full px-3 py-2 rounded-lg text-sm font-medium transition-colors text-left capitalize ${selectedDocType === docType
+                        ? "bg-accent text-accent-foreground"
+                        : "bg-muted text-foreground hover:bg-muted/80"
+                        }`}
                     >
-                      {category}
+                      {docType}
                     </button>
                   ))}
                 </div>
@@ -1137,9 +1205,9 @@ These documents provide the most current guidance for tax year 2024.`
                       City: <span className="font-semibold">{selectedCity}</span>
                     </p>
                   )}
-                  {selectedCategory && (
+                  {selectedDocType && (
                     <p>
-                      Category: <span className="font-semibold capitalize">{selectedCategory}</span>
+                      Document Type: <span className="font-semibold capitalize">{selectedDocType}</span>
                     </p>
                   )}
                 </div>
@@ -1178,11 +1246,10 @@ These documents provide the most current guidance for tax year 2024.`
                       <button
                         key={mode.value}
                         onClick={() => setRetrievalMode(mode.value as any)}
-                        className={`w-full px-3 py-2 rounded-lg text-sm font-medium transition-colors text-left ${
-                          retrievalMode === mode.value
-                            ? "bg-accent text-accent-foreground"
-                            : "bg-muted text-foreground hover:bg-muted/80"
-                        }`}
+                        className={`w-full px-3 py-2 rounded-lg text-sm font-medium transition-colors text-left ${retrievalMode === mode.value
+                          ? "bg-accent text-accent-foreground"
+                          : "bg-muted text-foreground hover:bg-muted/80"
+                          }`}
                       >
                         <div className="font-semibold">{mode.label}</div>
                         <div className="text-xs opacity-70 mt-0.5">{mode.desc}</div>
@@ -1242,11 +1309,11 @@ These documents provide the most current guidance for tax year 2024.`
                     <span className="text-xs text-muted-foreground w-16 text-right">Semantic (1.0)</span>
                   </div>
                   <div className="text-xs text-muted-foreground px-1">
-                    {semanticLexicalBalance.toFixed(1)} - {semanticLexicalBalance < 0.3 
-                      ? "More keyword/exact matching" 
-                      : semanticLexicalBalance > 0.7 
-                      ? "More semantic/meaning-based matching"
-                      : "Balanced between keyword and semantic matching"}
+                    {semanticLexicalBalance.toFixed(1)} - {semanticLexicalBalance < 0.3
+                      ? "More keyword/exact matching"
+                      : semanticLexicalBalance > 0.7
+                        ? "More semantic/meaning-based matching"
+                        : "Balanced between keyword and semantic matching"}
                   </div>
                 </div>
               </div>

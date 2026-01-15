@@ -42,4 +42,3 @@ __all__ = [
     "get_file_parser_service",
     "ParseResult",
 ]
-

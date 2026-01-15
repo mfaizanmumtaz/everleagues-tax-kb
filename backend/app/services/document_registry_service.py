@@ -1,10 +1,9 @@
 """PostgreSQL Document Registry management service."""
 
-from datetime import datetime
 from typing import Optional, List
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select
 
 from ..db_models.document_registry import DocumentRegistry, DocumentBlob
 

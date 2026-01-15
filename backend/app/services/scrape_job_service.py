@@ -65,17 +65,23 @@ class ScrapeJobService:
     ) -> Tuple[List[ScrapeJob], int]:
         """Get jobs for a specific URL."""
         # Count query
-        count_stmt = select(func.count()).select_from(ScrapeJob).where(
-            ScrapeJob.scrape_url_id == scrape_url_id
+        count_stmt = (
+            select(func.count())
+            .select_from(ScrapeJob)
+            .where(ScrapeJob.scrape_url_id == scrape_url_id)
         )
         count_result = await self.db.execute(count_stmt)
         total = count_result.scalar()
 
         # Data query
         offset = (page - 1) * limit
-        stmt = select(ScrapeJob).where(
-            ScrapeJob.scrape_url_id == scrape_url_id
-        ).order_by(ScrapeJob.created_at.desc()).offset(offset).limit(limit)
+        stmt = (
+            select(ScrapeJob)
+            .where(ScrapeJob.scrape_url_id == scrape_url_id)
+            .order_by(ScrapeJob.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
         result = await self.db.execute(stmt)
         jobs = result.scalars().all()
 
@@ -316,4 +322,3 @@ class ScrapeJobService:
             "triggered_by": job.triggered_by,
             "created_at": job.created_at.isoformat() if job.created_at else None,
         }
-

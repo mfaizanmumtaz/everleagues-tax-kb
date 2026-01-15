@@ -4,10 +4,9 @@ from datetime import datetime
 from typing import Optional, List
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select
 
 from ..db_models.scrape_url import UploadedFile, ProcessingStatus
-from ..config import settings
 
 
 class UploadedFileService:

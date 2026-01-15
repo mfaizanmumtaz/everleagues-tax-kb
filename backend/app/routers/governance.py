@@ -17,6 +17,7 @@ router = APIRouter(prefix="/governance", tags=["Governance"])
 
 class GovernanceLogEntry(BaseModel):
     """A governance log entry."""
+
     id: str
     document_id: str
     document_name: str
@@ -29,6 +30,7 @@ class GovernanceLogEntry(BaseModel):
 
 class GovernanceLogsResponse(BaseModel):
     """Response for governance logs."""
+
     items: List[GovernanceLogEntry]
     total: int
     page: int
@@ -40,6 +42,7 @@ class GovernanceLogsResponse(BaseModel):
 
 class GovernanceLogCreate(BaseModel):
     """Request to create a governance log entry."""
+
     document_id: str = Field(..., description="Document ID")
     to_state: GovernanceState = Field(..., description="New governance state")
     changed_by: str = Field(..., description="User who made the change")
@@ -48,68 +51,76 @@ class GovernanceLogCreate(BaseModel):
 
 @router.get("/logs", response_model=GovernanceLogsResponse)
 async def get_governance_logs(
-    document_id: Optional[str] = Query(default=None, description="Filter by document ID"),
-    from_state: Optional[GovernanceState] = Query(default=None, description="Filter by from state"),
-    to_state: Optional[GovernanceState] = Query(default=None, description="Filter by to state"),
+    document_id: Optional[str] = Query(
+        default=None, description="Filter by document ID"
+    ),
+    from_state: Optional[GovernanceState] = Query(
+        default=None, description="Filter by from state"
+    ),
+    to_state: Optional[GovernanceState] = Query(
+        default=None, description="Filter by to state"
+    ),
     changed_by: Optional[str] = Query(default=None, description="Filter by user"),
     page: int = Query(default=1, ge=1, description="Page number"),
     limit: int = Query(default=20, ge=1, le=100, description="Items per page"),
 ):
     """
     Get governance audit logs.
-    
+
     Returns paginated list of governance state changes.
     """
     try:
         solr = get_solr_service()
         document_service = get_document_service()
-        
+
         # Build filters
         filters = []
         if document_id:
             filters.append(f"id:{document_id}")
         if to_state:
-            filters.append(f"governanceState:\"{to_state.value}\"")
-        
+            filters.append(f'governanceState:"{to_state.value}"')
+
         # Get documents that have governance history
         docs, total = solr.search_documents(
             query="governanceHistory:*",
             filters=filters if filters else None,
             start=(page - 1) * limit,
             rows=limit,
-            sort="updatedAt desc"
+            sort="updatedAt desc",
         )
-        
+
         # Extract governance log entries from documents
         log_entries = []
         for doc in docs:
             doc_response = document_service._solr_to_response(doc)
-            
+
             for history_entry in doc_response.governance_history:
                 # Apply filters
                 if from_state and history_entry.from_state != from_state.value:
                     continue
                 if changed_by and history_entry.changed_by != changed_by:
                     continue
-                
-                log_entries.append(GovernanceLogEntry(
-                    id=f"{doc['id']}_{history_entry.timestamp.isoformat()}",
-                    document_id=doc["id"],
-                    document_name=doc.get("name", doc.get("documentName", "")),
-                    from_state=history_entry.from_state,
-                    to_state=history_entry.to_state,
-                    changed_by=history_entry.changed_by,
-                    reason=history_entry.reason,
-                    timestamp=history_entry.timestamp,
-                ))
-        
+
+                log_entries.append(
+                    GovernanceLogEntry(
+                        id=f"{doc['id']}_{history_entry.timestamp.isoformat()}",
+                        document_id=doc["id"],
+                        document_name=doc.get("name", doc.get("documentName", "")),
+                        from_state=history_entry.from_state,
+                        to_state=history_entry.to_state,
+                        changed_by=history_entry.changed_by,
+                        reason=history_entry.reason,
+                        timestamp=history_entry.timestamp,
+                    )
+                )
+
         # Sort by timestamp descending
         log_entries.sort(key=lambda x: x.timestamp, reverse=True)
-        
+
         # Paginate
         total_entries = len(log_entries)
         pages = (total_entries + limit - 1) // limit
-        
+
         return GovernanceLogsResponse(
             items=log_entries[:limit],
             total=total_entries,
@@ -130,12 +141,12 @@ async def create_governance_log(
 ):
     """
     Create a governance log entry by updating a document's governance state.
-    
+
     This updates the document's governance state and adds a history entry.
     """
     try:
         from ..models.document import GovernanceStateUpdate
-        
+
         document_service = get_document_service()
         audit_service = AuditLogService(db)
 
@@ -145,7 +156,11 @@ async def create_governance_log(
             raise HTTPException(status_code=404, detail="Document not found")
 
         # Store previous state for audit log
-        previous_state = doc.governance_state.value if hasattr(doc.governance_state, 'value') else str(doc.governance_state)
+        previous_state = (
+            doc.governance_state.value
+            if hasattr(doc.governance_state, "value")
+            else str(doc.governance_state)
+        )
 
         # Update governance state
         update = GovernanceStateUpdate(
@@ -154,7 +169,9 @@ async def create_governance_log(
             reason=entry.reason,
         )
 
-        updated_doc = await document_service.update_governance_state(entry.document_id, update)
+        updated_doc = await document_service.update_governance_state(
+            entry.document_id, update
+        )
 
         # Log to PostgreSQL audit log
         await audit_service.log_governance_change(
@@ -165,7 +182,7 @@ async def create_governance_log(
             actor=entry.changed_by,
             reason=entry.reason,
         )
-        
+
         # Return the new log entry
         if updated_doc.governance_history:
             latest = updated_doc.governance_history[-1]
@@ -179,7 +196,7 @@ async def create_governance_log(
                 reason=latest.reason,
                 timestamp=latest.timestamp,
             )
-        
+
         # Fallback
         return GovernanceLogEntry(
             id=f"{entry.document_id}_{datetime.utcnow().isoformat()}",
@@ -203,7 +220,7 @@ async def get_document_governance_logs(
 ):
     """
     Get governance logs for a specific document.
-    
+
     Returns all governance history entries for the document.
     """
     try:
@@ -212,26 +229,27 @@ async def get_document_governance_logs(
         doc = await document_service.get_document(document_id)
         if not doc:
             raise HTTPException(status_code=404, detail="Document not found")
-        
+
         log_entries = []
         for history_entry in doc.governance_history:
-            log_entries.append(GovernanceLogEntry(
-                id=f"{document_id}_{history_entry.timestamp.isoformat()}",
-                document_id=document_id,
-                document_name=doc.name,
-                from_state=history_entry.from_state,
-                to_state=history_entry.to_state,
-                changed_by=history_entry.changed_by,
-                reason=history_entry.reason,
-                timestamp=history_entry.timestamp,
-            ))
-        
+            log_entries.append(
+                GovernanceLogEntry(
+                    id=f"{document_id}_{history_entry.timestamp.isoformat()}",
+                    document_id=document_id,
+                    document_name=doc.name,
+                    from_state=history_entry.from_state,
+                    to_state=history_entry.to_state,
+                    changed_by=history_entry.changed_by,
+                    reason=history_entry.reason,
+                    timestamp=history_entry.timestamp,
+                )
+            )
+
         # Sort by timestamp descending
         log_entries.sort(key=lambda x: x.timestamp, reverse=True)
-        
+
         return log_entries
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-

@@ -11,7 +11,7 @@ from ..db_models.scrape_url import (
     ApiCredential,
     DataSourceType,
     ScheduleFrequency,
-    UrlStatus
+    UrlStatus,
 )
 
 
@@ -21,11 +21,11 @@ class UrlDbService:
     def __init__(self, db: AsyncSession):
         """Initialize with database session."""
         self.db = db
-    
+
     async def create_url(
         self,
         url: str,
-        category: str = "Federal",
+        jurisdiction: str = "federal",  # Now accepts jurisdiction directly
         state: Optional[str] = None,
         city: Optional[str] = None,
         data_source: DataSourceType = DataSourceType.SCRAPE,
@@ -40,12 +40,12 @@ class UrlDbService:
     ) -> ScrapeUrl:
         """
         Create a new URL entry.
-        
+
         Args:
             url: URL to scrape
-            category: Federal, State, or Local
-            state: State code (for State/Local)
-            city: City name (for Local)
+            jurisdiction: federal, state, or local (required)
+            state: State code (required for state/local)
+            city: City name (required for local)
             data_source: scrape, api, or file
             schedule_frequency: How often to scrape
             api_endpoint: API endpoint (if data_source is api)
@@ -55,26 +55,20 @@ class UrlDbService:
             delay_between_requests: Seconds between requests
             max_requests_per_minute: Rate limit
             max_files_per_session: Max files to download
-        
+
         Returns:
             Created ScrapeUrl object
         """
-        # Determine jurisdiction from category
-        jurisdiction = "federal"
-        if category.lower() == "state":
-            jurisdiction = "state"
-        elif category.lower() == "local":
-            jurisdiction = "local"
-        
+        # Jurisdiction is now provided directly (no derivation needed)
         # Create URL entry
         scrape_url = ScrapeUrl(
             url=url,
             name=name,
             description=description,
-            category=category,
+            category=None,  # Deprecated, use jurisdiction
             state=state,
             city=city,
-            jurisdiction=jurisdiction,
+            jurisdiction=jurisdiction.lower(),
             data_source=data_source,
             schedule_frequency=schedule_frequency,
             delay_between_requests=delay_between_requests,
@@ -83,7 +77,7 @@ class UrlDbService:
             status=UrlStatus.ACTIVE,
             documents_count=0,
         )
-        
+
         self.db.add(scrape_url)
         await self.db.flush()  # Get the ID
 
@@ -92,7 +86,9 @@ class UrlDbService:
             credential = ApiCredential(
                 scrape_url_id=scrape_url.id,
                 api_endpoint=api_endpoint,
-                api_key_encrypted=api_key.encode() if api_key else None,  # In production, encrypt this
+                api_key_encrypted=api_key.encode()
+                if api_key
+                else None,  # In production, encrypt this
             )
             self.db.add(credential)
 
@@ -100,19 +96,19 @@ class UrlDbService:
         await self.db.refresh(scrape_url)
 
         return scrape_url
-    
+
     async def get_url(self, url_id: UUID) -> Optional[ScrapeUrl]:
         """Get a URL by ID."""
         stmt = select(ScrapeUrl).where(ScrapeUrl.id == url_id)
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
-    
+
     async def get_url_by_url(self, url: str) -> Optional[ScrapeUrl]:
         """Get a URL by its URL string."""
         stmt = select(ScrapeUrl).where(ScrapeUrl.url == url)
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
-    
+
     async def list_urls(
         self,
         category: Optional[str] = None,
@@ -162,17 +158,15 @@ class UrlDbService:
         data_stmt = select(ScrapeUrl)
         if conditions:
             data_stmt = data_stmt.where(*conditions)
-        data_stmt = data_stmt.order_by(ScrapeUrl.created_at.desc()).offset(offset).limit(limit)
+        data_stmt = (
+            data_stmt.order_by(ScrapeUrl.created_at.desc()).offset(offset).limit(limit)
+        )
         result = await self.db.execute(data_stmt)
         urls = result.scalars().all()
 
         return urls, total
-    
-    async def update_url(
-        self,
-        url_id: UUID,
-        **kwargs
-    ) -> Optional[ScrapeUrl]:
+
+    async def update_url(self, url_id: UUID, **kwargs) -> Optional[ScrapeUrl]:
         """
         Update a URL entry.
 
@@ -192,7 +186,7 @@ class UrlDbService:
             "url": "url",
             "name": "name",
             "description": "description",
-            "category": "category",
+            "jurisdiction": "jurisdiction",  # Direct mapping, no derivation
             "state": "state",
             "city": "city",
             "data_source": "data_source",
@@ -206,28 +200,18 @@ class UrlDbService:
 
         for key, value in kwargs.items():
             if key in field_mapping and value is not None:
+                # Normalize jurisdiction to lowercase
+                if key == "jurisdiction" and isinstance(value, str):
+                    value = value.lower()
                 setattr(scrape_url, field_mapping[key], value)
-
-        # Update jurisdiction if category changed
-        if "category" in kwargs and kwargs["category"]:
-            category = kwargs["category"].lower()
-            if category == "federal":
-                scrape_url.jurisdiction = "federal"
-            elif category == "state":
-                scrape_url.jurisdiction = "state"
-            elif category == "local":
-                scrape_url.jurisdiction = "local"
 
         await self.db.commit()
         await self.db.refresh(scrape_url)
 
         return scrape_url
-    
+
     async def update_url_status(
-        self,
-        url_id: UUID,
-        status: UrlStatus,
-        error_message: Optional[str] = None
+        self, url_id: UUID, status: UrlStatus, error_message: Optional[str] = None
     ) -> Optional[ScrapeUrl]:
         """Update URL status."""
         scrape_url = await self.get_url(url_id)
@@ -245,7 +229,7 @@ class UrlDbService:
         await self.db.refresh(scrape_url)
 
         return scrape_url
-    
+
     async def update_scrape_stats(
         self,
         url_id: UUID,
@@ -269,8 +253,10 @@ class UrlDbService:
         await self.db.refresh(scrape_url)
 
         return scrape_url
-    
-    async def increment_documents_count(self, url_id: UUID, count: int = 1) -> Optional[ScrapeUrl]:
+
+    async def increment_documents_count(
+        self, url_id: UUID, count: int = 1
+    ) -> Optional[ScrapeUrl]:
         """Increment the documents count for a URL."""
         scrape_url = await self.get_url(url_id)
         if not scrape_url:
@@ -281,7 +267,7 @@ class UrlDbService:
         await self.db.refresh(scrape_url)
 
         return scrape_url
-    
+
     async def delete_url(self, url_id: UUID) -> bool:
         """
         Delete a URL entry.
@@ -297,10 +283,9 @@ class UrlDbService:
         await self.db.commit()
 
         return True
-    
+
     async def get_urls_for_scheduling(
-        self,
-        frequency: Optional[ScheduleFrequency] = None
+        self, frequency: Optional[ScheduleFrequency] = None
     ) -> List[ScrapeUrl]:
         """Get URLs that need to be scheduled for scraping."""
         stmt = select(ScrapeUrl).where(
@@ -313,13 +298,13 @@ class UrlDbService:
 
         result = await self.db.execute(stmt)
         return result.scalars().all()
-    
+
     async def get_api_credential(self, url_id: UUID) -> Optional[ApiCredential]:
         """Get API credential for a URL."""
         stmt = select(ApiCredential).where(ApiCredential.scrape_url_id == url_id)
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
-    
+
     def to_dict(self, scrape_url: ScrapeUrl) -> dict:
         """Convert ScrapeUrl to dictionary for API response."""
         return {
@@ -331,16 +316,25 @@ class UrlDbService:
             "state": scrape_url.state,
             "city": scrape_url.city,
             "jurisdiction": scrape_url.jurisdiction,
-            "data_source": scrape_url.data_source.value if scrape_url.data_source else "scrape",
-            "schedule_frequency": scrape_url.schedule_frequency.value if scrape_url.schedule_frequency else "on_demand",
+            "data_source": scrape_url.data_source.value
+            if scrape_url.data_source
+            else "scrape",
+            "schedule_frequency": scrape_url.schedule_frequency.value
+            if scrape_url.schedule_frequency
+            else "on_demand",
             "status": scrape_url.status.value if scrape_url.status else "active",
             "error_message": scrape_url.error_message,
             "documents_count": scrape_url.documents_count or 0,
-            "last_scraped": scrape_url.last_scraped_at.isoformat() if scrape_url.last_scraped_at else None,
+            "last_scraped": scrape_url.last_scraped_at.isoformat()
+            if scrape_url.last_scraped_at
+            else None,
             "delay_between_requests": scrape_url.delay_between_requests,
             "max_requests_per_minute": scrape_url.max_requests_per_minute,
             "max_files_per_session": scrape_url.max_files_per_session,
-            "created_at": scrape_url.created_at.isoformat() if scrape_url.created_at else None,
-            "updated_at": scrape_url.updated_at.isoformat() if scrape_url.updated_at else None,
+            "created_at": scrape_url.created_at.isoformat()
+            if scrape_url.created_at
+            else None,
+            "updated_at": scrape_url.updated_at.isoformat()
+            if scrape_url.updated_at
+            else None,
         }
-

@@ -10,14 +10,14 @@ Usage:
         is_valid_state,
         is_valid_city,
     )
-    
+
     # Get all valid state codes
     states = get_valid_states()  # ['AL', 'AK', 'AZ', ...]
-    
+
     # Check if a state is valid
     if is_valid_state('CA'):
         ...
-    
+
     # Get cities for a state
     cities = get_valid_cities('CA')  # ['Los Angeles', 'San Francisco', ...]
 """
@@ -51,6 +51,7 @@ def get_config() -> Dict[str, Any]:
 
 # ==================== States ====================
 
+
 def get_valid_states() -> List[str]:
     """Get list of valid state codes (e.g., ['AL', 'AK', 'AZ', ...])."""
     config = _load_config()
@@ -73,6 +74,7 @@ def is_valid_state(state_code: str) -> bool:
 
 # ==================== Cities ====================
 
+
 def get_valid_cities(state_code: str) -> List[str]:
     """Get list of valid cities for a state."""
     config = _load_config()
@@ -93,7 +95,7 @@ def is_valid_city(city: str, state_code: Optional[str] = None) -> bool:
     """Check if a city is valid, optionally within a specific state."""
     if not city:
         return False
-    
+
     if state_code:
         valid_cities = get_valid_cities(state_code)
         return city in valid_cities
@@ -103,6 +105,7 @@ def is_valid_city(city: str, state_code: Optional[str] = None) -> bool:
 
 
 # ==================== Categories ====================
+
 
 def get_valid_categories() -> List[str]:
     """Get list of valid categories (e.g., ['Federal', 'State', 'Local'])."""
@@ -119,6 +122,7 @@ def is_valid_category(category: str) -> bool:
 
 # ==================== Document Types ====================
 
+
 def get_valid_doc_types() -> List[str]:
     """Get list of valid document types."""
     config = _load_config()
@@ -134,6 +138,7 @@ def is_valid_doc_type(doc_type: str) -> bool:
 
 # ==================== Tax Types ====================
 
+
 def get_valid_tax_types() -> List[str]:
     """Get list of valid tax types."""
     config = _load_config()
@@ -148,6 +153,7 @@ def is_valid_tax_type(tax_type: str) -> bool:
 
 
 # ==================== Utility ====================
+
 
 def get_states_with_cities() -> Dict[str, Dict[str, Any]]:
     """Get full states dictionary with names and cities."""

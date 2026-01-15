@@ -1,9 +1,9 @@
 """Audit log service for PostgreSQL."""
 
 from datetime import datetime
-from typing import Optional, List, Tuple, Any
+from typing import Optional, List, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, or_, and_
+from sqlalchemy import select, func, or_
 
 from ..db_models.audit import AuditLog
 
@@ -131,7 +131,8 @@ class AuditLogService:
             actor=actor,
             old_values={"governance_state": from_state} if from_state else None,
             new_values={"governance_state": to_state, "reason": reason},
-            details=f"Governance state changed from '{from_state}' to '{to_state}'" + (f": {reason}" if reason else ""),
+            details=f"Governance state changed from '{from_state}' to '{to_state}'"
+            + (f": {reason}" if reason else ""),
         )
 
     async def log_url_create(

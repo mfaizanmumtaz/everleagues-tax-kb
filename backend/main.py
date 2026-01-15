@@ -16,7 +16,7 @@ async def lifespan(app: FastAPI):
     """Application lifespan events."""
     # Startup
     print("Starting Tax KB API...")
-    
+
     # Check PostgreSQL connection
     try:
         async with async_engine.connect() as conn:
@@ -24,11 +24,11 @@ async def lifespan(app: FastAPI):
             print("  PostgreSQL: OK")
     except Exception as e:
         print(f"  PostgreSQL: NOT AVAILABLE ({e})")
-    
+
     # Check Solr connection
     try:
         solr = get_solr_service()
-        health = solr.health_check()
+        health = await solr.health_check()
         if health.get("documents"):
             print("  Solr tax_documents: OK")
         else:
@@ -39,7 +39,7 @@ async def lifespan(app: FastAPI):
             print("  Solr tax_chunks: NOT AVAILABLE")
     except Exception as e:
         print(f"  Solr connection error: {e}")
-    
+
     # Check Azure Blob Storage
     try:
         blob_service = get_blob_storage_service()
@@ -49,11 +49,11 @@ async def lifespan(app: FastAPI):
             print("  Azure Blob Storage: NOT CONFIGURED")
     except Exception as e:
         print(f"  Azure Blob Storage: Error ({e})")
-    
+
     print(f"API ready at http://{settings.api_host}:{settings.api_port}")
-    
+
     yield
-    
+
     # Shutdown
     print("Shutting down Tax KB API...")
 
@@ -117,8 +117,8 @@ async def health_check():
     """Health check endpoint."""
     try:
         solr = get_solr_service()
-        health = solr.health_check()
-        
+        health = await solr.health_check()
+
         return {
             "status": "healthy" if all(health.values()) else "degraded",
             "solr_documents": health.get("documents", False),
@@ -138,12 +138,10 @@ async def health_check():
 # For running with uvicorn directly
 if __name__ == "__main__":
     import uvicorn
-    
+
     uvicorn.run(
         "main:app",
         host=settings.api_host,
         port=settings.api_port,
         reload=settings.debug,
     )
-
-

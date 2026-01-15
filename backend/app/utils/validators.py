@@ -1,7 +1,6 @@
 """Data validation helper functions."""
 
 from typing import Optional
-import re
 from urllib.parse import urlparse
 
 
@@ -31,8 +30,25 @@ def sanitize_solr_query(query: str) -> str:
     """Sanitize a query string for Solr to prevent injection."""
     # Escape special Solr characters
     special_chars = [
-        "+", "-", "&&", "||", "!", "(", ")", "{", "}", 
-        "[", "]", "^", '"', "~", "*", "?", ":", "\\", "/"
+        "+",
+        "-",
+        "&&",
+        "||",
+        "!",
+        "(",
+        ")",
+        "{",
+        "}",
+        "[",
+        "]",
+        "^",
+        '"',
+        "~",
+        "*",
+        "?",
+        ":",
+        "\\",
+        "/",
     ]
     escaped = query
     for char in special_chars:
@@ -51,4 +67,3 @@ def extract_domain_from_url(url: str) -> Optional[str]:
         return domain
     except Exception:
         return None
-

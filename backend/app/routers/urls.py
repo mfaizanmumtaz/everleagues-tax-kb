@@ -22,8 +22,10 @@ router = APIRouter(prefix="/urls", tags=["URL Management"])
 
 # ==================== Pydantic Models ====================
 
+
 class DataSource(str, Enum):
     """Data source type."""
+
     SCRAPE = "scrape"
     API = "api"
     FILE = "file"
@@ -31,6 +33,7 @@ class DataSource(str, Enum):
 
 class ScheduleFrequency(str, Enum):
     """Scraping schedule frequency."""
+
     ON_DEMAND = "on_demand"
     DAILY = "daily"
     WEEKLY = "weekly"
@@ -41,6 +44,7 @@ class ScheduleFrequency(str, Enum):
 
 class URLStatus(str, Enum):
     """URL status."""
+
     ACTIVE = "active"
     INACTIVE = "inactive"
     ERROR = "error"
@@ -49,27 +53,48 @@ class URLStatus(str, Enum):
 
 class URLBase(BaseModel):
     """Base URL fields."""
+
     url: str = Field(..., description="URL to scrape")
-    category: str = Field(default="Federal", description="Category (Federal/State/Local)")
-    state: Optional[str] = Field(default=None, description="State code if state-level or local-level")
+    category: str = Field(
+        default="Federal", description="Category (Federal/State/Local)"
+    )
+    state: Optional[str] = Field(
+        default=None, description="State code if state-level or local-level"
+    )
     city: Optional[str] = Field(default=None, description="City name if local-level")
-    data_source: DataSource = Field(default=DataSource.SCRAPE, description="Data source type")
-    schedule_frequency: ScheduleFrequency = Field(default=ScheduleFrequency.ON_DEMAND, description="Scraping schedule")
-    api_key: Optional[str] = Field(default=None, description="API key if data source is API")
-    api_endpoint: Optional[str] = Field(default=None, description="API endpoint if data source is API")
+    data_source: DataSource = Field(
+        default=DataSource.SCRAPE, description="Data source type"
+    )
+    schedule_frequency: ScheduleFrequency = Field(
+        default=ScheduleFrequency.ON_DEMAND, description="Scraping schedule"
+    )
+    api_key: Optional[str] = Field(
+        default=None, description="API key if data source is API"
+    )
+    api_endpoint: Optional[str] = Field(
+        default=None, description="API endpoint if data source is API"
+    )
 
 
 class URLCreate(URLBase):
     """Request to create a URL."""
+
     name: Optional[str] = Field(default=None, description="Display name")
     description: Optional[str] = Field(default=None, description="Description")
-    delay_between_requests: int = Field(default=2, ge=1, description="Seconds between requests")
-    max_requests_per_minute: int = Field(default=30, ge=1, description="Max requests per minute")
-    max_files_per_session: int = Field(default=10000, ge=1, description="Max files to download")
+    delay_between_requests: int = Field(
+        default=2, ge=1, description="Seconds between requests"
+    )
+    max_requests_per_minute: int = Field(
+        default=30, ge=1, description="Max requests per minute"
+    )
+    max_files_per_session: int = Field(
+        default=10000, ge=1, description="Max files to download"
+    )
 
 
 class URLUpdate(BaseModel):
     """Request to update a URL."""
+
     url: Optional[str] = None
     name: Optional[str] = None
     category: Optional[str] = None
@@ -87,6 +112,7 @@ class URLUpdate(BaseModel):
 
 class URLResponse(BaseModel):
     """URL response."""
+
     id: str
     url: str
     name: Optional[str] = None
@@ -111,6 +137,7 @@ class URLResponse(BaseModel):
 
 class URLListResponse(BaseModel):
     """Response for URL list."""
+
     items: List[URLResponse]
     total: int
     page: int
@@ -122,6 +149,7 @@ class URLListResponse(BaseModel):
 
 class ScrapeProgress(BaseModel):
     """Scraping progress response."""
+
     url_id: str
     status: str
     current: int = 0
@@ -130,6 +158,7 @@ class ScrapeProgress(BaseModel):
 
 
 # ==================== Helper Functions ====================
+
 
 def _map_data_source(api_value: DataSource) -> DbDataSourceType:
     """Map API data source to DB enum."""
@@ -171,12 +200,15 @@ _scrape_tasks: dict = {}
 
 # ==================== API Endpoints ====================
 
+
 @router.get("", response_model=URLListResponse)
 async def list_urls(
     category: Optional[str] = Query(default=None, description="Filter by category"),
     state: Optional[str] = Query(default=None, description="Filter by state"),
     status: Optional[URLStatus] = Query(default=None, description="Filter by status"),
-    data_source: Optional[DataSource] = Query(default=None, description="Filter by data source"),
+    data_source: Optional[DataSource] = Query(
+        default=None, description="Filter by data source"
+    ),
     search: Optional[str] = Query(default=None, description="Search in URL"),
     page: int = Query(default=1, ge=1, description="Page number"),
     limit: int = Query(default=20, ge=1, le=100, description="Items per page"),
@@ -201,11 +233,11 @@ async def list_urls(
             page=page,
             limit=limit,
         )
-        
+
         pages = (total + limit - 1) // limit if total > 0 else 1
-        
+
         items = [URLResponse(**url_service.to_dict(u)) for u in urls]
-        
+
         return URLListResponse(
             items=items,
             total=total,
@@ -233,7 +265,7 @@ async def get_url(
 
         if not scrape_url:
             raise HTTPException(status_code=404, detail="URL not found")
-        
+
         return URLResponse(**url_service.to_dict(scrape_url))
     except HTTPException:
         raise
@@ -278,9 +310,12 @@ async def create_url(
         await audit_service.log_url_create(
             url_id=str(scrape_url.id),
             url=scrape_url.url,
-            values={"category": url_data.category, "data_source": url_data.data_source.value},
+            values={
+                "category": url_data.category,
+                "data_source": url_data.data_source.value,
+            },
         )
-        
+
         return URLResponse(**url_service.to_dict(scrape_url))
     except HTTPException:
         raise
@@ -299,11 +334,11 @@ async def update_url(
     """
     try:
         url_service = UrlDbService(db)
-        
+
         # Build update kwargs
         update_kwargs = {}
         update_data = updates.model_dump(exclude_unset=True)
-        
+
         for key, value in update_data.items():
             if value is not None:
                 if key == "data_source":
@@ -319,7 +354,7 @@ async def update_url(
 
         if not scrape_url:
             raise HTTPException(status_code=404, detail="URL not found")
-        
+
         return URLResponse(**url_service.to_dict(scrape_url))
     except HTTPException:
         raise
@@ -352,7 +387,7 @@ async def delete_url(
 
         # Log the action
         await audit_service.log_url_delete(url_id=url_id, url=url_string)
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -367,7 +402,7 @@ async def trigger_scrape(
 ):
     """
     Trigger scraping for a URL.
-    
+
     Starts a background task to scrape the URL.
     """
     try:
@@ -389,7 +424,7 @@ async def trigger_scrape(
 
         # Update status to scraping
         await url_service.update_url_status(UUID(url_id), DbUrlStatus.SCRAPING)
-        
+
         # Initialize progress
         _scrape_tasks[url_id] = {
             "status": "started",
@@ -397,7 +432,7 @@ async def trigger_scrape(
             "total": 0,
             "message": "Starting scrape...",
         }
-        
+
         # Background task for scraping (mock implementation)
         async def do_scrape(uid: str, url_string: str):
             import asyncio
@@ -443,9 +478,9 @@ async def trigger_scrape(
                 async with AsyncSessionLocal() as db_session:
                     svc = UrlDbService(db_session)
                     await svc.update_url_status(UUID(uid), DbUrlStatus.ERROR, str(e))
-        
+
         background_tasks.add_task(do_scrape, url_id, scrape_url.url)
-        
+
         return ScrapeProgress(
             url_id=url_id,
             status="started",
@@ -473,14 +508,17 @@ async def get_scrape_progress(
         scrape_url = await url_service.get_url(UUID(url_id))
         if not scrape_url:
             raise HTTPException(status_code=404, detail="URL not found")
-        
-        progress = _scrape_tasks.get(url_id, {
-            "status": "idle",
-            "current": 0,
-            "total": 0,
-            "message": "No active scraping task",
-        })
-        
+
+        progress = _scrape_tasks.get(
+            url_id,
+            {
+                "status": "idle",
+                "current": 0,
+                "total": 0,
+                "message": "No active scraping task",
+            },
+        )
+
         return ScrapeProgress(
             url_id=url_id,
             status=progress.get("status", "idle"),
