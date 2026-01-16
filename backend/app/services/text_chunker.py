@@ -13,21 +13,22 @@ class TextChunker:
         """Initialize text chunker with default settings."""
         # Default chunk size and overlap (in tokens)
         # Using token-based splitting for better model compatibility
-        self.default_chunk_size = 600  # tokens (middle of 400-800 range)
+        self.default_chunk_size = 800  # tokens (middle of 400-800 range)
         self.default_chunk_overlap = (
-            100  # tokens (20% overlap for context preservation)
+            200  # tokens (20% overlap for context preservation)
         )
 
         # Document type-specific chunk sizes (in tokens)
         self.chunk_sizes = {
-            "irc": 600,  # IRC/CFR: 400-800 tokens
-            "cfr": 600,
-            "publication": 500,  # Pubs: section-based, slightly smaller
-            "form": 400,  # Forms instructions: line groups
-            "instructions": 400,
-            "schedule": 400,
-            "sales_tax": 450,  # Sales tax: 300-600 tokens
-            "default": 600,
+            "irc": 800,  # IRC/CFR: 400-800 tokens
+            "cfr": 800,
+            "publication": 800,  # Pubs: section-based, slightly smaller
+            "form": 800,  # Forms instructions: line groups
+            "instructions": 800,
+            "schedule": 800,
+            "sales_tax": 800,  # Sales tax: 300-600 tokens
+            "default": 800,
+            "faq":500,
         }
 
         # Initialize the text splitter

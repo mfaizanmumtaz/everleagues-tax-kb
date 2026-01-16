@@ -310,8 +310,7 @@ class SolrService:
         # Format vector as string for Solr
         vector_str = "[" + ",".join(str(v) for v in vector) + "]"
 
-        # Build the query data - use POST to avoid URI too long error
-        # The vector string is very long (1536 dimensions) and exceeds URL limits
+
         data = {
             "q": f"{{!knn f=vector topK={top_k}}}{vector_str}",
             "wt": "json",
