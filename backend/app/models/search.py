@@ -40,6 +40,10 @@ class SearchRequest(BaseModel):
     search_quality_controls: Optional[SearchQualityControls] = Field(
         default=None, description="Search quality control parameters"
     )
+    generate_answer: bool = Field(
+        default=True,
+        description="Whether to generate an LLM answer based on retrieved chunks",
+    )
 
 
 class RetrievedChunk(BaseModel):
@@ -124,6 +128,12 @@ class SearchResponse(BaseModel):
     total_chunks: int = Field(description="Total number of matching chunks")
     search_time_ms: float = Field(description="Search execution time in milliseconds")
     retrieval_mode: str = Field(description="Search mode used")
+
+    # Generated answer from LLM
+    generated_answer: Optional[str] = Field(
+        default=None,
+        description="LLM-generated answer based on retrieved chunks (if generate_answer=True)",
+    )
 
     # Score breakdown for debugging
     score_weights: Optional[dict] = Field(

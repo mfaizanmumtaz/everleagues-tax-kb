@@ -1,76 +1,49 @@
 """PostgreSQL Document Registry management service."""
 
+from datetime import datetime
 from typing import Optional, List
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from ..db_models.document_registry import DocumentRegistry, DocumentBlob
+from ..db_models.document_registry import (
+    DocumentRegistry,
+    DocumentBlob,
+    SourceType,
+    ProcessingStatus,
+)
 
 
 class DocumentRegistryService:
     """Service for managing document registry entries in PostgreSQL."""
 
     def __init__(self, db: AsyncSession):
-        """Initialize with database session."""
         self.db = db
 
-    async def create(
+    async def create_for_upload(
         self,
-        solr_document_id: str,
-        document_name: Optional[str] = None,
+        document_name: str,
+        source_url: Optional[str] = None,
         title: Optional[str] = None,
         jurisdiction: Optional[str] = None,
         state: Optional[str] = None,
         city: Optional[str] = None,
         tax_year: Optional[int] = None,
-        governance_state: Optional[str] = None,
         doc_type: Optional[str] = None,
-        category: Optional[str] = None,
-        source_url: Optional[str] = None,
-        scrape_url_id: Optional[UUID] = None,
-        uploaded_file_id: Optional[UUID] = None,
-        scrape_job_id: Optional[UUID] = None,
     ) -> DocumentRegistry:
-        """
-        Create a new document registry entry.
-
-        Links a Solr document to its source (scrape URL, uploaded file, or scrape job).
-
-        Args:
-            solr_document_id: ID of the document in Solr
-            document_name: Document filename/name
-            title: Document title
-            jurisdiction: federal, state, or local
-            state: State code
-            city: City name (for local jurisdiction)
-            tax_year: Applicable tax year
-            governance_state: Current governance state
-            doc_type: Type of document
-            category: Document category
-            source_url: Source URL for reference
-            scrape_url_id: FK to scrape_urls table
-            uploaded_file_id: FK to uploaded_files table
-            scrape_job_id: FK to scrape_jobs table
-
-        Returns:
-            Created DocumentRegistry object
-        """
+        """Create a registry entry for a file upload (starts in PENDING status)."""
         registry = DocumentRegistry(
-            solr_document_id=solr_document_id,
+            source_type=SourceType.UPLOAD,
+            processing_status=ProcessingStatus.PENDING,
             document_name=document_name,
-            title=title,
+            title=title or document_name,
             jurisdiction=jurisdiction,
             state=state,
             city=city,
             tax_year=tax_year,
-            governance_state=governance_state,
             doc_type=doc_type,
-            category=category,
             source_url=source_url,
-            scrape_url_id=scrape_url_id,
-            uploaded_file_id=uploaded_file_id,
-            scrape_job_id=scrape_job_id,
+            governance_state="pending",
             version=1,
             is_latest=True,
             chunk_count=0,
@@ -79,90 +52,116 @@ class DocumentRegistryService:
         self.db.add(registry)
         await self.db.commit()
         await self.db.refresh(registry)
+        return registry
 
+    async def create_for_scrape(
+        self,
+        scrape_url_id: UUID,
+        scrape_job_id: UUID,
+        document_name: str,
+        source_url: Optional[str] = None,
+        title: Optional[str] = None,
+        jurisdiction: Optional[str] = None,
+        state: Optional[str] = None,
+        city: Optional[str] = None,
+        tax_year: Optional[int] = None,
+        doc_type: Optional[str] = None,
+    ) -> DocumentRegistry:
+        """Create a registry entry for a scraped document."""
+        registry = DocumentRegistry(
+            source_type=SourceType.SCRAPE,
+            processing_status=ProcessingStatus.PENDING,
+            scrape_url_id=scrape_url_id,
+            scrape_job_id=scrape_job_id,
+            document_name=document_name,
+            title=title or document_name,
+            jurisdiction=jurisdiction,
+            state=state,
+            city=city,
+            tax_year=tax_year,
+            doc_type=doc_type,
+            source_url=source_url,
+            governance_state="pending",
+            version=1,
+            is_latest=True,
+            chunk_count=0,
+        )
+
+        self.db.add(registry)
+        await self.db.commit()
+        await self.db.refresh(registry)
+        return registry
+
+    async def update_processing_status(
+        self,
+        registry_id: UUID,
+        status: ProcessingStatus,
+        error: Optional[str] = None,
+    ) -> Optional[DocumentRegistry]:
+        """Update the processing status of a document."""
+        registry = await self.get_by_id(registry_id)
+        if not registry:
+            return None
+
+        registry.processing_status = status
+        if error:
+            registry.processing_error = error
+        if status in (ProcessingStatus.COMPLETED, ProcessingStatus.FAILED):
+            registry.processed_at = datetime.utcnow()
+
+        await self.db.commit()
+        await self.db.refresh(registry)
+        return registry
+
+    async def update_solr_reference(
+        self,
+        registry_id: UUID,
+        solr_document_id: str,
+    ) -> Optional[DocumentRegistry]:
+        """Link registry entry to its Solr document."""
+        registry = await self.get_by_id(registry_id)
+        if not registry:
+            return None
+
+        registry.solr_document_id = solr_document_id
+        await self.db.commit()
+        await self.db.refresh(registry)
         return registry
 
     async def get_by_id(self, registry_id: UUID) -> Optional[DocumentRegistry]:
-        """
-        Get document registry entry by ID.
-
-        Args:
-            registry_id: UUID of the registry entry
-
-        Returns:
-            DocumentRegistry if found, None otherwise
-        """
         stmt = select(DocumentRegistry).where(DocumentRegistry.id == registry_id)
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
     async def get_by_solr_id(self, solr_document_id: str) -> Optional[DocumentRegistry]:
-        """
-        Get document registry entry by Solr document ID.
-
-        Args:
-            solr_document_id: ID of the document in Solr
-
-        Returns:
-            DocumentRegistry if found, None otherwise
-        """
         stmt = select(DocumentRegistry).where(
             DocumentRegistry.solr_document_id == solr_document_id
         )
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def get_by_uploaded_file(
-        self,
-        uploaded_file_id: UUID,
-        limit: int = 100,
-        offset: int = 0,
-    ) -> List[DocumentRegistry]:
-        """
-        Get document registry entries associated with an uploaded file.
-
-        Args:
-            uploaded_file_id: UUID of the uploaded file
-            limit: Maximum number of results
-            offset: Number of results to skip
-
-        Returns:
-            List of DocumentRegistry objects
-        """
+    async def get_by_content_hash(self, content_hash: str) -> Optional[DocumentRegistry]:
+        """Find registry by blob content hash for duplicate detection."""
         stmt = (
             select(DocumentRegistry)
-            .where(DocumentRegistry.uploaded_file_id == uploaded_file_id)
-            .order_by(DocumentRegistry.created_at.desc())
-            .offset(offset)
-            .limit(limit)
+            .join(DocumentBlob)
+            .where(DocumentBlob.content_hash == content_hash)
         )
         result = await self.db.execute(stmt)
-        return result.scalars().all()
+        return result.scalar_one_or_none()
 
     async def update_chunk_count(
         self,
         registry_id: UUID,
         chunk_count: int,
     ) -> Optional[DocumentRegistry]:
-        """
-        Update the denormalized chunk count for a document.
-
-        Args:
-            registry_id: UUID of the registry entry
-            chunk_count: New chunk count
-
-        Returns:
-            Updated DocumentRegistry if found, None otherwise
-        """
         registry = await self.get_by_id(registry_id)
         if not registry:
             return None
 
         registry.chunk_count = chunk_count
-
         await self.db.commit()
         await self.db.refresh(registry)
-
         return registry
 
     async def update_governance_state(
@@ -170,25 +169,13 @@ class DocumentRegistryService:
         registry_id: UUID,
         governance_state: str,
     ) -> Optional[DocumentRegistry]:
-        """
-        Update the governance state of a document.
-
-        Args:
-            registry_id: UUID of the registry entry
-            governance_state: New governance state
-
-        Returns:
-            Updated DocumentRegistry if found, None otherwise
-        """
         registry = await self.get_by_id(registry_id)
         if not registry:
             return None
 
         registry.governance_state = governance_state
-
         await self.db.commit()
         await self.db.refresh(registry)
-
         return registry
 
     async def create_blob(
@@ -198,26 +185,12 @@ class DocumentRegistryService:
         blob_container: str,
         blob_path: str,
         blob_url: Optional[str] = None,
+        original_filename: Optional[str] = None,
         file_size: Optional[int] = None,
         mime_type: Optional[str] = None,
         content_hash: Optional[str] = None,
     ) -> Optional[DocumentBlob]:
-        """
-        Create a blob reference for a document.
-
-        Args:
-            registry_id: UUID of the registry entry
-            blob_type: Type of blob (raw, processed, chunk)
-            blob_container: Azure Blob container name
-            blob_path: Path within the container
-            blob_url: Full URL to access the blob
-            file_size: Size in bytes
-            mime_type: MIME type
-            content_hash: SHA-256 hash for deduplication
-
-        Returns:
-            Created DocumentBlob if registry found, None otherwise
-        """
+        """Create a blob reference for a document."""
         registry = await self.get_by_id(registry_id)
         if not registry:
             return None
@@ -228,6 +201,7 @@ class DocumentRegistryService:
             blob_container=blob_container,
             blob_path=blob_path,
             blob_url=blob_url,
+            original_filename=original_filename,
             file_size=file_size,
             mime_type=mime_type,
             content_hash=content_hash,
@@ -238,8 +212,41 @@ class DocumentRegistryService:
         self.db.add(blob)
         await self.db.commit()
         await self.db.refresh(blob)
-
         return blob
+
+    async def list_by_status(
+        self,
+        status: ProcessingStatus,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> List[DocumentRegistry]:
+        """List documents by processing status."""
+        stmt = (
+            select(DocumentRegistry)
+            .where(DocumentRegistry.processing_status == status)
+            .order_by(DocumentRegistry.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        result = await self.db.execute(stmt)
+        return result.scalars().all()
+
+    async def list_by_source_type(
+        self,
+        source_type: SourceType,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> List[DocumentRegistry]:
+        """List documents by source type."""
+        stmt = (
+            select(DocumentRegistry)
+            .where(DocumentRegistry.source_type == source_type)
+            .order_by(DocumentRegistry.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        result = await self.db.execute(stmt)
+        return result.scalars().all()
 
     async def list_by_jurisdiction(
         self,
@@ -247,17 +254,6 @@ class DocumentRegistryService:
         limit: int = 100,
         offset: int = 0,
     ) -> List[DocumentRegistry]:
-        """
-        List document registry entries by jurisdiction.
-
-        Args:
-            jurisdiction: Jurisdiction to filter by (federal, state, local)
-            limit: Maximum number of results
-            offset: Number of results to skip
-
-        Returns:
-            List of DocumentRegistry objects
-        """
         stmt = (
             select(DocumentRegistry)
             .where(
@@ -272,20 +268,19 @@ class DocumentRegistryService:
         return result.scalars().all()
 
     async def delete(self, registry_id: UUID) -> bool:
-        """
-        Delete a document registry entry and its associated blobs.
-
-        Args:
-            registry_id: UUID of the registry entry
-
-        Returns:
-            True if deleted, False if not found
-        """
         registry = await self.get_by_id(registry_id)
         if not registry:
             return False
 
         await self.db.delete(registry)
         await self.db.commit()
+        return True
 
+    async def delete_by_solr_id(self, solr_document_id: str) -> bool:
+        registry = await self.get_by_solr_id(solr_document_id)
+        if not registry:
+            return False
+
+        await self.db.delete(registry)
+        await self.db.commit()
         return True

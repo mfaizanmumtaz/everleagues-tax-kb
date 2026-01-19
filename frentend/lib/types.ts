@@ -142,6 +142,7 @@ export interface SearchRequest {
     query: string
     filters?: SearchFilters
     search_quality_controls?: SearchQualityControls
+    generate_answer?: boolean  // Default: true - Generate LLM answer from chunks
 }
 
 // Retrieved Chunk (from search results)
@@ -191,6 +192,7 @@ export interface SearchResponse {
     total_chunks: number
     search_time_ms: number
     retrieval_mode: string
+    generated_answer?: string  // LLM-generated answer based on retrieved chunks
     score_weights?: { alpha: number; beta: number; gamma: number }
 }
 

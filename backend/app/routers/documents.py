@@ -1,7 +1,8 @@
 """Document API routes."""
 
-from fastapi import APIRouter, HTTPException, Query, Path
+from fastapi import APIRouter, HTTPException, Query, Path, Depends
 from typing import Optional, List
+from sqlalchemy.ext.asyncio import AsyncSession
 from ..models.document import (
     DocumentCreate,
     DocumentUpdate,
@@ -11,6 +12,8 @@ from ..models.document import (
 )
 from ..models.common import FilterParams, GovernanceState
 from ..services.document_service import get_document_service
+from ..services.document_registry_service import DocumentRegistryService
+from ..database.connection import get_db
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
 
@@ -153,6 +156,7 @@ async def update_document(
 @router.delete("/{document_id}", status_code=204)
 async def delete_document(
     document_id: str = Path(..., description="Document ID"),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Delete a document and all its chunks.
@@ -160,12 +164,14 @@ async def delete_document(
     try:
         service = get_document_service()
 
-        # Check if document exists
         doc = await service.get_document(document_id)
         if not doc:
             raise HTTPException(status_code=404, detail="Document not found")
 
         await service.delete_document(document_id)
+
+        registry_service = DocumentRegistryService(db)
+        await registry_service.delete_by_solr_id(document_id)
     except HTTPException:
         raise
     except Exception as e:

@@ -10,7 +10,6 @@ from .text_chunker import TextChunker, get_text_chunker
 from .url_db_service import UrlDbService
 from .audit_log_service import AuditLogService
 from .scrape_job_service import ScrapeJobService
-from .uploaded_file_service import UploadedFileService
 from .document_registry_service import DocumentRegistryService
 
 # Azure Blob Storage Service
@@ -18,6 +17,9 @@ from .blob_storage_service import BlobStorageService, get_blob_storage_service
 
 # File Parser Service (LangChain-based)
 from .file_parser import FileParserService, get_file_parser_service, ParseResult
+
+# LLM Service for RAG answer generation
+from .llm_service import LLMService, get_llm_service
 
 __all__ = [
     # Solr Services
@@ -32,7 +34,6 @@ __all__ = [
     "UrlDbService",
     "AuditLogService",
     "ScrapeJobService",
-    "UploadedFileService",
     "DocumentRegistryService",
     # Azure Blob Storage
     "BlobStorageService",
@@ -41,4 +42,7 @@ __all__ = [
     "FileParserService",
     "get_file_parser_service",
     "ParseResult",
+    # LLM Service
+    "LLMService",
+    "get_llm_service",
 ]

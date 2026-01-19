@@ -23,6 +23,7 @@ from dataclasses import dataclass, field, asdict
 from enum import Enum
 
 from ..config import settings
+from ..prompts import get_classifier_system_prompt, get_classifier_user_prompt
 
 
 class DocType(str, Enum):
@@ -159,6 +160,9 @@ class DocumentClassifierService:
         """
         self.use_ai = use_ai
         self.api_key = openai_api_key or settings.openai_api_key
+        self.model = settings.classifier_llm_model
+        self.temperature = settings.classifier_llm_temperature
+        self.max_tokens = settings.classifier_llm_max_tokens
         self._client = None
 
     def _get_openai_client(self):
@@ -237,42 +241,26 @@ class DocumentClassifierService:
         # Truncate text to avoid token limits (approx 4000 chars = 1000 tokens)
         truncated_text = text[:8000] if len(text) > 8000 else text
 
-        prompt = f"""Analyze this tax document and extract the following metadata in JSON format:
-
-Document text (first part):
----
-{truncated_text}
----
-
-Source URL: {source_url or "Not provided"}
-Filename: {filename or "Not provided"}
-
-Please extract and return a JSON object with these fields:
-{{
-  "title": "Document title (extract from content or derive from filename)",
-  "description": "Brief summary of what the document covers (1-2 sentences)",
-  "doc_type": "One of: form, instructions, publication, schedule, regulation, ruling, notice, faq, guide, other",
-  "authority_level": "Number 1-6 where 1=Statute/Regulation, 2=Forms, 3=Rulings, 4=FAQs, 5=Expert, 6=Other",
-  "authority_level_rationale": "Brief explanation of why this authority level",
-  "tags": ["array", "of", "relevant", "keywords"] maximum 4,
-  "tax_year": "Year as integer if mentioned, null otherwise",
-  "form_family": "Form family identifier (e.g. 1040, SchC) if applicable"
-}}
-
-Return ONLY the JSON object, no other text."""
+        # Load prompts from files
+        system_prompt = get_classifier_system_prompt()
+        user_prompt = get_classifier_user_prompt(
+            document_text=truncated_text,
+            source_url=source_url,
+            filename=filename,
+        )
 
         try:
             response = client.chat.completions.create(
-                model="gpt-4o-mini",  # Use cost-effective model
+                model=self.model,
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are a tax document classification expert. Extract metadata from tax documents accurately.",
+                        "content": system_prompt,
                     },
-                    {"role": "user", "content": prompt},
+                    {"role": "user", "content": user_prompt},
                 ],
-                temperature=0.1,  # Low temperature for consistent results
-                max_tokens=500,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
             )
 
             # Parse the response

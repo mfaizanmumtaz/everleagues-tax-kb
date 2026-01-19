@@ -433,6 +433,7 @@ export default function TaxChatbot() {
           semantic_lexical_balance: semanticLexicalBalance,
           top_k: 10,
         },
+        generate_answer: true,  // Enable LLM answer generation
       })
 
       const messageId = (Date.now() + 1).toString()
@@ -488,8 +489,11 @@ export default function TaxChatbot() {
       let responseContent: string
       if (retrievedChunks.length === 0) {
         responseContent = `I couldn't find any documents matching your query "${queryText}". Try adjusting your filters or rephrasing your question.`
+      } else if (response.generated_answer) {
+        // Use the LLM-generated answer from the backend
+        responseContent = response.generated_answer
       } else {
-        // Build response with inline citations
+        // Fallback: Build response with inline citations if no generated answer
         const snippets = retrievedChunks.slice(0, 3).map((chunk, index) =>
           `${chunk.content.slice(0, 200)}${chunk.content.length > 200 ? "..." : ""} [${index + 1}]`
         ).join("\n\n")

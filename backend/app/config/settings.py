@@ -46,6 +46,19 @@ class Settings(BaseSettings):
     embedding_dimension: int = 1536
 
     # ===========================================
+    # LLM Configuration
+    # ===========================================
+    # Model for document classification (metadata extraction)
+    classifier_llm_model: str = "gpt-4o-mini"
+    classifier_llm_temperature: float = 0.1
+    classifier_llm_max_tokens: int = 500
+    
+    # Model for RAG answer generation
+    rag_llm_model: str = "gpt-4o-mini"
+    rag_llm_temperature: float = 0.1
+    rag_llm_max_tokens: int = 1500
+
+    # ===========================================
     # Hybrid Search Weights
     # ===========================================
     bm25_weight: float = 0.3  # alpha

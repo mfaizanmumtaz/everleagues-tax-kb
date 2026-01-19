@@ -1,0 +1,23 @@
+==================================================
+LOAD TEST REPORT - 2026-01-18T13:42:50.680885
+==================================================
+Total Duration: 449.63 seconds
+Concurrency level: 10
+
+SEARCH API Results:
+  Total Requests: 50
+  Success: 5
+  Failed: 45
+  Avg Latency: 47.1954s
+  Max Latency: 47.7705s
+  Min Latency: 45.5071s
+  Throughput: 0.11 req/s
+
+UPLOAD API Results:
+  Total Requests: 20
+  Success: 6
+  Failed: 14
+  Avg Latency: 57.3358s
+  Max Latency: 102.9282s
+  Min Latency: 17.9218s
+  Throughput: 0.04 req/s

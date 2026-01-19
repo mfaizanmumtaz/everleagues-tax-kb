@@ -1,11 +1,11 @@
-"""File Upload API routes."""
+"""File Upload API routes - using unified DocumentRegistry."""
 
 import asyncio
 import json
 import os
 from typing import Optional
 from datetime import datetime
-from uuid import uuid4
+from uuid import uuid4, UUID
 from fastapi import (
     APIRouter,
     HTTPException,
@@ -26,15 +26,14 @@ from ..services.file_parser import get_file_parser_service
 from ..services.document_service import get_document_service
 from ..services.document_classifier_service import get_document_classifier_service
 from ..services.audit_log_service import AuditLogService
-from ..services.uploaded_file_service import UploadedFileService
 from ..services.document_registry_service import DocumentRegistryService
-from ..db_models.scrape_url import ProcessingStatus
+from ..db_models.document_registry import ProcessingStatus
+from ..database.connection import AsyncSessionLocal
 
 router = APIRouter(prefix="/upload", tags=["File Upload"])
 
 
 def _validate_file_size(file_size: int) -> None:
-    """Validate file size against maximum allowed."""
     max_size = settings.max_upload_size_bytes
     if file_size > max_size:
         raise HTTPException(
@@ -44,7 +43,6 @@ def _validate_file_size(file_size: int) -> None:
 
 
 def _validate_file_type(filename: str) -> None:
-    """Validate file extension is in allowed list."""
     _, ext = os.path.splitext(filename)
     ext = ext.lower()
 
@@ -56,7 +54,6 @@ def _validate_file_type(filename: str) -> None:
 
 
 def _parse_metadata(metadata_str: Optional[str]) -> FileUploadMetadata:
-    """Parse metadata JSON string to FileUploadMetadata."""
     if not metadata_str:
         return FileUploadMetadata()
 
@@ -76,50 +73,13 @@ async def upload_file(
     db: AsyncSession = Depends(get_db),
     background_tasks: BackgroundTasks = None,
 ):
-    """
-    Upload a file and process it through the ingestion pipeline.
-
-    This endpoint:
-    1. Validates file (size, type)
-    2. Uploads file to Azure Blob Storage
-    3. Extracts text using FileParserService
-    4. Creates document record in Solr
-    5. Processes and chunks document for RAG
-    6. Logs the upload action
-
-    **Request:**
-    - `file`: The file to upload (multipart/form-data)
-    - `metadata`: Optional JSON string with document metadata
-
-    **Response:**
-    - Document details with processing status and metrics
-
-    **Supported File Types:**
-    - PDF (.pdf)
-    - Word Documents (.doc, .docx)
-    - Text Files (.txt)
-    - XML Files (.xml)
-    - HTML Files (.html, .htm)
-
-    **Example Metadata:**
-    ```json
-    {
-      "category": "State",
-      "state": "CA",
-      "tax_year": 2024,
-      "jurisdiction": "State",
-      "tags": ["sales-tax", "california"]
-    }
-    ```
-    """
+    """Upload a file and process it through the ingestion pipeline."""
     try:
-        # Step 1: Validate file
         if not file.filename:
             raise HTTPException(status_code=400, detail="Filename is required")
 
         _validate_file_type(file.filename)
 
-        # Read file content
         file_content = await file.read()
         file_size = len(file_content)
 
@@ -128,10 +88,8 @@ async def upload_file(
 
         _validate_file_size(file_size)
 
-        # Step 2: Parse metadata
         upload_metadata = _parse_metadata(metadata)
 
-        # Step 3: Upload to Azure Blob Storage
         blob_service = get_blob_storage_service()
 
         if not blob_service.is_configured():
@@ -139,7 +97,6 @@ async def upload_file(
                 status_code=503, detail="Azure Blob Storage is not configured"
             )
 
-        # Generate stored filename (UUID-based for uniqueness)
         file_ext = os.path.splitext(file.filename)[1].lower()
         stored_filename = f"{uuid4()}{file_ext}"
 
@@ -161,38 +118,50 @@ async def upload_file(
                 detail=f"Failed to store file in blob storage: {str(e)}",
             )
 
-        # Step 4: Create UploadedFile record in PostgreSQL with PENDING status
-        uploaded_file_service = UploadedFileService(db)
+        # Create DocumentRegistry entry with PENDING status
+        registry_service = DocumentRegistryService(db)
 
         try:
-            uploaded_file = await uploaded_file_service.create(
-                original_filename=file.filename,
-                stored_filename=stored_filename,
-                file_path=blob_path,
-                file_size=file_size,
-                mime_type=file.content_type,
-                checksum=checksum,
+            registry = await registry_service.create_for_upload(
+                document_name=file.filename,
+                source_url=blob_url,
+                title=upload_metadata.title,
+                jurisdiction=upload_metadata.jurisdiction,
+                state=upload_metadata.state,
+                city=upload_metadata.city,
+                tax_year=upload_metadata.tax_year,
+                doc_type=upload_metadata.doc_type,
+            )
+
+            # Create blob record
+            await registry_service.create_blob(
+                registry_id=registry.id,
+                blob_type="raw",
                 blob_container=settings.azure_container_uploads,
                 blob_path=blob_path,
                 blob_url=blob_url,
+                original_filename=file.filename,
+                file_size=file_size,
+                mime_type=file.content_type,
+                content_hash=checksum,
             )
-            uploaded_file_id = str(uploaded_file.id)
+
+            # Update status to PROCESSING
+            await registry_service.update_processing_status(
+                registry.id, ProcessingStatus.PROCESSING
+            )
+
+            registry_id = str(registry.id)
         except Exception as e:
             raise HTTPException(
                 status_code=500,
-                detail=f"Failed to create uploaded file record: {str(e)}",
+                detail=f"Failed to create registry record: {str(e)}",
             )
 
-        # Update status to PROCESSING
-        await uploaded_file_service.update_processing_status(
-            uploaded_file.id, ProcessingStatus.PROCESSING
-        )
-
-        # Return immediately with "processing" status - all heavy processing happens in background
         response = FileUploadResponse(
-            document_id="pending",  # Will be updated when processing completes
-            uploaded_file_id=uploaded_file_id,
-            registry_id=None,
+            document_id="pending",
+            uploaded_file_id=None,  # Deprecated
+            registry_id=registry_id,
             filename=file.filename,
             file_size=file_size,
             blob_path=blob_path,
@@ -207,11 +176,10 @@ async def upload_file(
             document=None,
         )
 
-        # Schedule background processing
         if background_tasks:
             background_tasks.add_task(
                 _process_uploaded_file,
-                uploaded_file_id=uploaded_file_id,
+                registry_id=registry_id,
                 file_content=file_content,
                 original_filename=file.filename,
                 content_type=file.content_type,
@@ -221,9 +189,8 @@ async def upload_file(
                 upload_metadata=upload_metadata,
             )
         else:
-            # Fallback: process synchronously if BackgroundTasks not available
             await _process_uploaded_file(
-                uploaded_file_id=uploaded_file_id,
+                registry_id=registry_id,
                 file_content=file_content,
                 original_filename=file.filename,
                 content_type=file.content_type,
@@ -244,7 +211,7 @@ async def upload_file(
 
 
 async def _process_uploaded_file(
-    uploaded_file_id: str,
+    registry_id: str,
     file_content: bytes,
     original_filename: str,
     content_type: str,
@@ -253,28 +220,17 @@ async def _process_uploaded_file(
     blob_url: str,
     upload_metadata: FileUploadMetadata,
 ):
-    """
-    Background task to process an uploaded file.
-
-    This handles:
-    - Text extraction
-    - AI classification
-    - Solr document creation
-    - Chunking and embedding
-    - Status updates
-    """
-    from ..database.connection import AsyncSessionLocal
+    """Background task to process an uploaded file."""
+    
 
     async with AsyncSessionLocal() as db:
-        uploaded_file_service = UploadedFileService(db)
+        registry_service = DocumentRegistryService(db)
         extraction_error = None
 
         try:
-            # Step 1: Extract text using FileParserService
             parser_service = get_file_parser_service()
 
             try:
-                # Run CPU-bound file parsing in thread pool to prevent blocking
                 parse_result = await asyncio.to_thread(
                     parser_service.extract_text,
                     file_data=file_content,
@@ -285,7 +241,6 @@ async def _process_uploaded_file(
                 parse_result = None
                 extraction_error = str(e)
 
-            # Step 2: AI Classification
             classification = None
             if parse_result and parse_result.success and parse_result.text:
                 try:
@@ -299,9 +254,7 @@ async def _process_uploaded_file(
                             "description": upload_metadata.description,
                             "doc_type": upload_metadata.doc_type,
                             "authority_level": upload_metadata.authority_level,
-                            "tags": upload_metadata.tags
-                            if upload_metadata.tags
-                            else None,
+                            "tags": upload_metadata.tags if upload_metadata.tags else None,
                             "tax_year": upload_metadata.tax_year,
                             "form_family": upload_metadata.form_family,
                         },
@@ -309,10 +262,8 @@ async def _process_uploaded_file(
                 except Exception:
                     classification = None
 
-            # Step 3: Create document record in Solr
             doc_service = get_document_service()
 
-            # Jurisdiction is now required and provided directly by user
             doc_create = DocumentCreate(
                 name=original_filename,
                 title=upload_metadata.title
@@ -325,21 +276,19 @@ async def _process_uploaded_file(
                 tags=upload_metadata.tags
                 if upload_metadata.tags
                 else (classification.tags if classification else []),
-                category=None,  # Deprecated, use jurisdiction instead
+                category=None,
                 doc_type=upload_metadata.doc_type
                 or (classification.doc_type if classification else None),
                 tax_year=upload_metadata.tax_year
                 or (classification.tax_year if classification else None),
                 tax_type=upload_metadata.tax_type,
-                jurisdiction=upload_metadata.jurisdiction,  # Directly from user input
+                jurisdiction=upload_metadata.jurisdiction,
                 state=upload_metadata.state,
                 city=upload_metadata.city,
                 authority_level=upload_metadata.authority_level
                 or (classification.authority_level if classification else None),
                 authority_level_rationale=upload_metadata.authority_level_rationale
-                or (
-                    classification.authority_level_rationale if classification else None
-                ),
+                or (classification.authority_level_rationale if classification else None),
                 size=str(file_size),
                 knowledge_base_id=upload_metadata.knowledge_base_id,
                 form_family=upload_metadata.form_family
@@ -361,61 +310,22 @@ async def _process_uploaded_file(
             try:
                 document = await doc_service.create_document(doc_create)
             except Exception as e:
-                await uploaded_file_service.update_processing_status(
-                    uploaded_file_id,
+                await registry_service.update_processing_status(
+                    UUID(registry_id),
                     ProcessingStatus.FAILED,
                     error=f"Failed to create Solr document: {str(e)}",
                 )
                 return
 
-            # Link uploaded file to Solr document
-            await uploaded_file_service.update_solr_reference(
-                uploaded_file_id, document.id
-            )
+            # Link registry to Solr document
+            await registry_service.update_solr_reference(UUID(registry_id), document.id)
 
-            # Step 4: Create DocumentRegistry entry
-            registry_service = DocumentRegistryService(db)
-            registry = None
-
-            try:
-                registry = await registry_service.create(
-                    solr_document_id=document.id,
-                    document_name=original_filename,
-                    title=upload_metadata.title or original_filename,
-                    jurisdiction=upload_metadata.jurisdiction,
-                    state=upload_metadata.state,
-                    city=upload_metadata.city,
-                    tax_year=upload_metadata.tax_year,
-                    governance_state="pending",
-                    doc_type=upload_metadata.doc_type,
-                    category=None,  # Deprecated, use jurisdiction instead
-                    source_url=blob_url,
-                    uploaded_file_id=uploaded_file_id,
-                )
-
-                await registry_service.create_blob(
-                    registry_id=registry.id,
-                    blob_type="raw",
-                    blob_container=settings.azure_container_uploads,
-                    blob_path=blob_path,
-                    blob_url=blob_url,
-                    file_size=file_size,
-                    mime_type=content_type,
-                    content_hash=None,
-                )
-            except Exception:
-                pass  # Registry creation is optional
-
-            # Step 5: Process and chunk document
             chunks_created = 0
             processing_errors = []
 
             if parse_result and parse_result.success and parse_result.text:
                 try:
-                    (
-                        chunks_created,
-                        errors,
-                    ) = await doc_service.process_and_chunk_document(
+                    chunks_created, errors = await doc_service.process_and_chunk_document(
                         doc_id=document.id,
                         text=parse_result.text,
                         generate_embeddings=True,
@@ -423,9 +333,9 @@ async def _process_uploaded_file(
                     if errors:
                         processing_errors.extend(errors)
 
-                    if chunks_created > 0 and registry:
+                    if chunks_created > 0:
                         await registry_service.update_chunk_count(
-                            registry.id, chunks_created
+                            UUID(registry_id), chunks_created
                         )
                 except Exception as e:
                     processing_errors.append(str(e))
@@ -434,21 +344,17 @@ async def _process_uploaded_file(
             elif not parse_result and extraction_error:
                 processing_errors.append(extraction_error)
 
-            # Step 6: Update final status
             if chunks_created > 0:
-                await uploaded_file_service.update_processing_status(
-                    uploaded_file_id, ProcessingStatus.COMPLETED
+                await registry_service.update_processing_status(
+                    UUID(registry_id), ProcessingStatus.COMPLETED
                 )
             else:
-                await uploaded_file_service.update_processing_status(
-                    uploaded_file_id,
+                await registry_service.update_processing_status(
+                    UUID(registry_id),
                     ProcessingStatus.FAILED,
-                    error="; ".join(processing_errors[:3])
-                    if processing_errors
-                    else "No chunks created",
+                    error="; ".join(processing_errors[:3]) if processing_errors else "No chunks created",
                 )
 
-            # Step 7: Log audit action
             try:
                 audit_service = AuditLogService(db)
                 await audit_service.log_action(
@@ -462,7 +368,7 @@ async def _process_uploaded_file(
                         "file_size": file_size,
                         "blob_path": blob_path,
                         "chunks_created": chunks_created,
-                        "uploaded_file_id": uploaded_file_id,
+                        "registry_id": registry_id,
                     },
                     details=f"File processed in background. Chunks: {chunks_created}",
                 )
@@ -470,10 +376,9 @@ async def _process_uploaded_file(
                 pass
 
         except Exception as e:
-            # Mark as failed on any unexpected error
             try:
-                await uploaded_file_service.update_processing_status(
-                    uploaded_file_id,
+                await registry_service.update_processing_status(
+                    UUID(registry_id),
                     ProcessingStatus.FAILED,
                     error=f"Background processing failed: {str(e)}",
                 )

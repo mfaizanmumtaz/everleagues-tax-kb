@@ -137,9 +137,11 @@ class FileUploadResponse(BaseModel):
     """Response after successful file upload and processing."""
 
     document_id: str = Field(..., description="Created document ID")
-    uploaded_file_id: str = Field(..., description="PostgreSQL uploaded file record ID")
+    uploaded_file_id: Optional[str] = Field(
+        default=None, description="Deprecated - use registry_id instead"
+    )
     registry_id: Optional[str] = Field(
-        default=None, description="Document registry ID if created"
+        default=None, description="Document registry ID (primary tracking ID)"
     )
     filename: str = Field(..., description="Original filename")
     file_size: int = Field(..., description="File size in bytes")

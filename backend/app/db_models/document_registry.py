@@ -1,4 +1,4 @@
-"""Document Registry models - links PostgreSQL to Solr documents."""
+"""Document Registry models - unified tracking for all document sources."""
 
 from sqlalchemy import (
     Column,
@@ -8,30 +8,63 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Text,
+    Enum,
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
+import enum
 
 from ..database.base import Base, UUIDMixin, TimestampMixin
 
 
+class SourceType(str, enum.Enum):
+    """Document source type."""
+    UPLOAD = "upload"
+    SCRAPE = "scrape"
+    API = "api"
+
+
+class ProcessingStatus(str, enum.Enum):
+    """Document processing status."""
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class DocumentRegistry(Base, UUIDMixin, TimestampMixin):
-    """Registry linking PostgreSQL metadata to Solr documents."""
+    """Unified registry for all documents - uploads, scrapes, and API imports."""
 
     __tablename__ = "document_registry"
 
-    # Solr reference
-    solr_document_id = Column(String(100), unique=True, nullable=False, index=True)
+    # Source type (upload, scrape, api)
+    source_type = Column(
+        Enum(SourceType, name="source_type"),
+        nullable=False,
+        default=SourceType.UPLOAD,
+        index=True,
+    )
+
+    # Processing status (replaces uploaded_files.processing_status)
+    processing_status = Column(
+        Enum(ProcessingStatus, name="processing_status"),
+        nullable=False,
+        default=ProcessingStatus.PENDING,
+        index=True,
+    )
+    
+    processing_error = Column(Text)
+    processed_at = Column(DateTime(timezone=True))
+
+    # Solr reference (nullable until processing completes)
+    solr_document_id = Column(String(100), unique=True, nullable=True, index=True)
 
     # Source tracking
     scrape_url_id = Column(
         UUID(as_uuid=True),
         ForeignKey("scrape_urls.id", ondelete="SET NULL"),
         index=True,
-    )
-    uploaded_file_id = Column(
-        UUID(as_uuid=True), ForeignKey("uploaded_files.id", ondelete="SET NULL")
     )
     scrape_job_id = Column(
         UUID(as_uuid=True), ForeignKey("scrape_jobs.id", ondelete="SET NULL")
@@ -42,7 +75,7 @@ class DocumentRegistry(Base, UUIDMixin, TimestampMixin):
     title = Column(String(500))
     jurisdiction = Column(String(50), index=True)
     state = Column(String(50), index=True)
-    city = Column(String(100), index=True)  # City name for local-level documents
+    city = Column(String(100), index=True)
     tax_year = Column(Integer, index=True)
     governance_state = Column(String(50), index=True)
     doc_type = Column(String(100))
@@ -91,6 +124,7 @@ class DocumentBlob(Base, UUIDMixin):
     blob_url = Column(Text)
 
     # File info
+    original_filename = Column(String(255))  # Original uploaded filename
     file_size = Column(Integer)  # in bytes
     mime_type = Column(String(100))
     content_hash = Column(String(64), index=True)  # SHA-256 for deduplication

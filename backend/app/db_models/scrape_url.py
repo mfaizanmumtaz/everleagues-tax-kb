@@ -9,7 +9,6 @@ from sqlalchemy import (
     Text,
     Enum,
     LargeBinary,
-    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
@@ -132,46 +131,3 @@ class ApiCredential(Base, UUIDMixin, TimestampMixin):
 
     # Relationships
     scrape_url = relationship("ScrapeUrl", back_populates="api_credential")
-
-
-class ProcessingStatus(str, enum.Enum):
-    """File processing status."""
-
-    PENDING = "pending"
-    PROCESSING = "processing"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-
-class UploadedFile(Base, UUIDMixin):
-    """Uploaded file metadata - for EL Cloud Files."""
-
-    __tablename__ = "uploaded_files"
-
-    # File info
-    original_filename = Column(String(255), nullable=False)
-    stored_filename = Column(String(255), nullable=False)  # UUID-based for uniqueness
-    file_path = Column(Text, nullable=False)  # Azure Blob path or local path
-    file_size = Column(Integer)  # in bytes
-    mime_type = Column(String(100))
-    checksum = Column(String(64))  # SHA-256
-
-    # Azure Blob specific
-    blob_container = Column(String(100))
-    blob_path = Column(Text)
-    blob_url = Column(Text)
-
-    # Processing status
-    processing_status = Column(
-        Enum(ProcessingStatus, name="processing_status"),
-        default=ProcessingStatus.PENDING,
-        index=True,
-    )
-    processing_error = Column(Text)
-    processed_at = Column(DateTime(timezone=True))
-
-    # Solr reference
-    solr_document_id = Column(String(100))
-
-    # Timestamp
-    created_at = Column(DateTime(timezone=True), server_default=text("now()"))

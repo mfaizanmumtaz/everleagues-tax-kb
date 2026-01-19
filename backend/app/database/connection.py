@@ -38,20 +38,14 @@ async_engine = create_async_engine(
 AsyncSessionLocal = async_sessionmaker(
     bind=async_engine,
     class_=AsyncSession,
-    expire_on_commit=False,  # Important for async to avoid refresh issues
+    expire_on_commit=False,
     autocommit=False,
     autoflush=False,
 )
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """
-    Async dependency for database session.
-
-    Usage in FastAPI routes:
-        async def my_route(db: AsyncSession = Depends(get_db)):
-            ...
-    """
+    """Async dependency for database session."""
     async with AsyncSessionLocal() as session:
         try:
             yield session
@@ -63,32 +57,32 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 # SYNC DATABASE (Only for init_db)
 # ========================================
 
-# Keep a separate sync engine ONLY for database initialization
-# This uses the original psycopg driver (need to install for init only)
 try:
-    # Try to create sync engine, but it's optional if psycopg2 not installed
     sync_engine = create_engine(
         settings.database_url, pool_pre_ping=True, echo=settings.database_echo
     )
 except Exception:
-    # If sync driver not available, we can use async for init_db with run_sync
     sync_engine = None
 
 
 def init_db() -> None:
-    """
-    Initialize database tables (synchronous).
-
-    This is only run once during setup, so we keep it synchronous
-    for simplicity.
-    """
+    """Initialize database tables."""
     from .base import Base
-    # Import all models to register them with Base
+    from ..db_models import (
+        ScrapeUrl,
+        ApiCredential,
+        ScrapeJob,
+        ScrapeJobLog,
+        DocumentRegistry,
+        DocumentBlob,
+        GovernanceTransition,
+        AuditLog,
+        SystemSetting,
+    )
 
     if sync_engine:
         Base.metadata.create_all(bind=sync_engine)
     else:
-        # If no sync engine, use async engine with run_sync
         import asyncio
 
         async def async_init():
