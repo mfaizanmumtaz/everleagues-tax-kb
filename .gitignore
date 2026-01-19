@@ -128,3 +128,6 @@ test/
 data/
 .claude/
 .cursor/
+.next
+CLAUDE.md
+FRONTEND_ANALYSIS_REPORT.md
