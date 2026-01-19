@@ -126,3 +126,5 @@ manage_solr9/
 backend/COMPREHENSIVE_LINK_CLASSIFICATION_REPORT.txt
 test/
 data/
+.claude/
+.cursor/
