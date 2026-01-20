@@ -28,6 +28,8 @@ pipeline {
               if [ ! -d .venv ]; then
                 uv venv .venv
               fi
+              
+              source .venv/bin/activate
 
               # Sync dependencies
               uv sync
