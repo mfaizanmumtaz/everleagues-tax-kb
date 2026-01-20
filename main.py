@@ -79,6 +79,9 @@ app = FastAPI(
     - `tax_chunks`: Chunk-level data with vectors for RAG search
     """,
     version="1.0.0",
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+    openapi_url="/api/openapi.json",
     lifespan=lifespan,
 )
 
@@ -143,5 +146,5 @@ if __name__ == "__main__":
         "main:app",
         host=settings.api_host,
         port=settings.api_port,
-        reload=settings.debug,
+        reload=False,
     )
