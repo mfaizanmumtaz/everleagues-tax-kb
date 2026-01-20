@@ -108,6 +108,12 @@ class ScrapeUrl(Base, UUIDMixin, TimestampMixin):
         "ScrapeJob", back_populates="scrape_url", cascade="all, delete-orphan"
     )
     document_registries = relationship("DocumentRegistry", back_populates="scrape_url")
+    discovered_pages = relationship(
+        "DiscoveredPage", back_populates="scrape_url", cascade="all, delete-orphan"
+    )
+    path_rules = relationship(
+        "PathRule", back_populates="scrape_url", cascade="all, delete-orphan"
+    )
 
 
 class ApiCredential(Base, UUIDMixin, TimestampMixin):

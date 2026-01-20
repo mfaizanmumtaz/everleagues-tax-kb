@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from sqlalchemy import text
 from app.config import settings
-from app.routers import search, documents, dashboard, governance, urls, audit, upload
+from app.routers import search, documents, dashboard, governance, urls, audit, upload, discovery
 from app.services.solr_service import get_solr_service
 
 
@@ -63,23 +63,26 @@ app = FastAPI(
     title="Tax Knowledge Base API",
     description="""
     RESTful API for the Tax Knowledge Base system.
-    
+
     ## Features
-    
+
     - **Search**: Hybrid RAG search combining BM25, vector similarity, and authority weighting
     - **Documents**: CRUD operations for tax documents with governance workflows
     - **Dashboard**: System metrics and health monitoring
     - **Governance**: Audit logs and governance state management
     - **URLs**: Manage scraping sources
-    
+
     ## Collections
-    
+
     The API uses two Solr collections:
     - `tax_documents`: Document-level metadata and governance
     - `tax_chunks`: Chunk-level data with vectors for RAG search
     """,
     version="1.0.0",
     lifespan=lifespan,
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+    openapi_url="/api/openapi.json",
 )
 
 # Configure CORS
@@ -97,6 +100,7 @@ app.include_router(documents.router, prefix=settings.api_prefix)
 app.include_router(dashboard.router, prefix=settings.api_prefix)
 app.include_router(governance.router, prefix=settings.api_prefix)
 app.include_router(urls.router, prefix=settings.api_prefix)
+app.include_router(discovery.router, prefix=settings.api_prefix)
 app.include_router(audit.router, prefix=settings.api_prefix)
 app.include_router(upload.router, prefix=settings.api_prefix)
 
@@ -107,8 +111,9 @@ async def root():
     return {
         "name": "Tax Knowledge Base API",
         "version": "1.0.0",
-        "docs": "/docs",
-        "openapi": "/openapi.json",
+        "docs": "/api/docs",
+        "redoc": "/api/redoc",
+        "openapi": "/api/openapi.json",
     }
 
 

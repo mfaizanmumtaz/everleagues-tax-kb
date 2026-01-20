@@ -11,6 +11,8 @@ from .document_registry import (
 from .governance import GovernanceTransition
 from .audit import AuditLog
 from .system import SystemSetting
+from .discovered_page import DiscoveredPage, PageStatus
+from .path_rule import PathRule, RuleType, RuleSource
 
 __all__ = [
     # URL Management
@@ -30,4 +32,12 @@ __all__ = [
     "AuditLog",
     # System
     "SystemSetting",
+    # Discovery
+    "DiscoveredPage",
+    "PageStatus",
+    # Path Rules
+    "PathRule",
+    "RuleType",
+    "RuleSource",
 ]
+
