@@ -18,22 +18,24 @@ pipeline {
 
                 // SSH into server and handle venv + dependencies + restart
                 sh '''
-                sudo ssh -o StrictHostKeyChecking=no elaitaxdevadmin@4.193.192.34 "
+                sudo ssh -o StrictHostKeyChecking=no elaitaxdevadmin@4.193.192.34 "    
                   set -e
+                  export PATH=$HOME/.local/bin:$PATH  # pipx uv path
+
                   cd /var/www/eltaxdevsvcserver-py-be
 
-                  # 2a️⃣ Ensure .venv exists
+              # Ensure .venv exists
                   if [ ! -d .venv ]; then
                     uv venv .venv
                   fi
 
-                  # 2b️⃣ Sync dependencies from uv.lock
+                  # Sync dependencies
                   uv sync
 
-                  # 2c️⃣ Ensure gunicorn is installed
+                  # Ensure gunicorn installed
                   uv add gunicorn
 
-                  # 2d️⃣ Restart FastAPI service via PM2 using .venv binary
+                  # Restart PM2 service
                   pm2 restart eltaxdevsvcserver-py
                 "
                 '''
