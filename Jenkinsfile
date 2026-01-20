@@ -18,27 +18,27 @@ pipeline {
 
                 // SSH into server and handle venv + dependencies + restart
                 sh '''
-                sudo ssh -o StrictHostKeyChecking=no elaitaxdevadmin@4.193.192.34 "    
-                  set -e
-                  export PATH=$HOME/.local/bin:$PATH  # pipx uv path
+            sudo ssh -o StrictHostKeyChecking=no elaitaxdevadmin@4.193.192.34 "
+              set -e
+              export PATH=$HOME/.local/bin:$PATH
 
-                  cd /var/www/eltaxdevsvcserver-py-be
+              cd /var/www/eltaxdevsvcserver-py-be
 
               # Ensure .venv exists
-                  if [ ! -d .venv ]; then
-                    uv venv .venv
-                  fi
+              if [ ! -d .venv ]; then
+                uv venv .venv
+              fi
 
-                  # Sync dependencies
-                  uv sync
+              # Sync dependencies
+              uv sync
 
-                  # Ensure gunicorn installed
-                  uv add gunicorn
+              # Ensure gunicorn installed
+              uv add gunicorn
 
-                  # Restart PM2 service
-                  pm2 restart eltaxdevsvcserver-py
-                "
-                '''
+              # Restart PM2 service
+              pm2 restart eltaxdevsvcserver-py
+              "
+              '''
             }
         }
     }
