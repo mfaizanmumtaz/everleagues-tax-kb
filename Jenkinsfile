@@ -21,18 +21,19 @@ pipeline {
             sudo ssh -o StrictHostKeyChecking=no elaitaxdevadmin@4.193.192.34 "
   set -e
 
-  export PATH=$HOME/.local/bin:$PATH
-  UVENV=/var/www/eltaxdevsvcserver-py-be/.venv
+export PATH=$HOME/.local/bin:$PATH   # uv command available
+UVENV=/var/www/eltaxdevsvcserver-py-be/.venv
 
-  cd /var/www/eltaxdevsvcserver-py-be
+cd /var/www/eltaxdevsvcserver-py-be
 
-  # Ensure .venv exists
-  if [ ! -d \"$UVENV\" ]; then
-    uv venv \"$UVENV\"
-  fi
+# Ensure .venv exists
+if [ ! -d "$UVENV" ]; then
+    uv venv "$UVENV"
+fi
 
-  # Activate venv
-  source \"$UVENV/bin/activate\"
+# Activate virtual environment
+source "$UVENV/bin/activate"
+
               # Sync dependencies
               uv sync
 
