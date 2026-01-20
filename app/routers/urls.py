@@ -294,7 +294,7 @@ async def create_url(
             url=url_data.url,
             name=url_data.name,
             description=url_data.description,
-            category=url_data.category,
+            jurisdiction=url_data.category,  # Frontend sends 'category', backend stores as 'jurisdiction'
             state=url_data.state,
             city=url_data.city,
             data_source=_map_data_source(url_data.data_source),
