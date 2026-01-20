@@ -19,16 +19,20 @@ pipeline {
                 // SSH into server and handle venv + dependencies + restart
                 sh '''
             sudo ssh -o StrictHostKeyChecking=no elaitaxdevadmin@4.193.192.34 "
+  set -e
 
-              cd /var/www/eltaxdevsvcserver-py-be
+  export PATH=$HOME/.local/bin:$PATH
+  UVENV=/var/www/eltaxdevsvcserver-py-be/.venv
 
-              # Ensure .venv exists
-              if [ ! -d .venv ]; then
-                uv venv /var/www/eltaxdevsvcserver-py-be/.venv
-              fi
-              
-              source .venv/bin/activate
+  cd /var/www/eltaxdevsvcserver-py-be
 
+  # Ensure .venv exists
+  if [ ! -d \"$UVENV\" ]; then
+    uv venv \"$UVENV\"
+  fi
+
+  # Activate venv
+  source \"$UVENV/bin/activate\"
               # Sync dependencies
               uv sync
 
