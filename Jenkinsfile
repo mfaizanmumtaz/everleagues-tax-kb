@@ -17,33 +17,34 @@ pipeline {
                 '''
 
                 // SSH into server and handle venv + dependencies + restart
-                sh '''
-            sudo ssh -o StrictHostKeyChecking=no elaitaxdevadmin@4.193.192.34 "
-  set -e
+sh '''
+sudo ssh -o StrictHostKeyChecking=no elaitaxdevadmin@4.193.192.34 << 'EOF'
+set -e
 
-export PATH=$HOME/.local/bin:$PATH   # uv command available
-UVENV=/var/www/eltaxdevsvcserver-py-be/.venv
+export PATH=$HOME/.local/bin:$PATH
 
 cd /var/www/eltaxdevsvcserver-py-be
 
-# Ensure .venv exists
-if [ ! -d "$UVENV" ]; then
-    uv venv "$UVENV"
+# Create venv if not exists
+if [ ! -d ".venv" ]; then
+    uv venv .venv
 fi
 
-# Activate virtual environment
-source "$UVENV/bin/activate"
+# Activate
+source .venv/bin/activate
 
-              # Sync dependencies
-              uv sync
+# Install deps
+uv sync
 
-              # Ensure gunicorn installed
-              uv add gunicorn
+# Ensure gunicorn
+uv add gunicorn
 
-              # Restart PM2 service
-              pm2 restart eltaxdevsvcserver-py
-              "
-              '''
+# Restart app
+pm2 restart eltaxdevsvcserver-py
+
+EOF
+'''
+
             }
         }
     }
@@ -66,5 +67,7 @@ source "$UVENV/bin/activate"
         }
     }
 }
+
+
 
 
