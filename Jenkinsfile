@@ -8,7 +8,7 @@ pipeline {
 
                 // Sync code to server
                 sh '''
-                rsync -avz --delete \
+                sudo rsync -avz --delete \
                   --exclude ".git" \
                   --exclude ".env" \
                   --exclude "Jenkinsfile" \
@@ -18,7 +18,7 @@ pipeline {
 
                 // SSH into server and handle venv + dependencies + restart
                 sh '''
-                ssh -o StrictHostKeyChecking=no elaitaxdevadmin@4.193.192.34 "
+                sudo ssh -o StrictHostKeyChecking=no elaitaxdevadmin@4.193.192.34 "
                   set -e
                   cd /var/www/eltaxdevsvcserver-py-be
 
