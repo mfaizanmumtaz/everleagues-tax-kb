@@ -19,8 +19,6 @@ pipeline {
                 // SSH into server and handle venv + dependencies + restart
                 sh '''
             sudo ssh -o StrictHostKeyChecking=no elaitaxdevadmin@4.193.192.34 "
-              set -e
-              export PATH=$HOME/.local/bin:$PATH
 
               cd /var/www/eltaxdevsvcserver-py-be
 
