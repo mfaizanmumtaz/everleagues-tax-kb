@@ -2,51 +2,38 @@ pipeline {
     agent any
 
     stages {
-        stage('Deploy') {
+        stage('Deploy FastAPI Backend') {
             steps {
-                echo 'Deploying FastAPI backend using uv and .venv'
+                echo 'Deploying FastAPI backend with uv and .venv'
 
-                // Copy backend source code to server
+                // Sync code to server
                 sh '''
-                sudo rsync -avz --delete \
-                --exclude ".git" \
-                --exclude ".env" \
-                --exclude "Jenkinsfile" \
-                /var/lib/jenkins/workspace/eltaxdevsvcserver-py-be/ \
-                elaitaxdevadmin@4.193.192.34:/var/www/eltaxdevsvcserver-py-be/
+                rsync -avz --delete \
+                  --exclude ".git" \
+                  --exclude ".env" \
+                  --exclude "Jenkinsfile" \
+                  /var/lib/jenkins/workspace/eltaxdevsvcserver-py-be/ \
+                  elaitaxdevadmin@4.193.192.34:/var/www/eltaxdevsvcserver-py-be/
                 '''
 
-                // SSH into server and deploy
+                // SSH into server and handle venv + dependencies + restart
                 sh '''
-                sudo ssh -o StrictHostKeyChecking=no elaitaxdevadmin@4.193.192.34 "
+                ssh -o StrictHostKeyChecking=no elaitaxdevadmin@4.193.192.34 "
                   set -e
                   cd /var/www/eltaxdevsvcserver-py-be
 
-                  echo 'Checking uv...'
-                  if ! command -v uv &> /dev/null; then
-                    echo 'Installing uv...'
-                    pip install --user uv
-                  fi
-
-                  # Add local bin to PATH so uv is found
-                  export PATH=~/.local/bin:$PATH
-
-                  echo 'Checking for virtual environment...'
+                  # 2a️⃣ Ensure .venv exists
                   if [ ! -d .venv ]; then
-                    echo 'Creating new .venv environment...'
                     uv venv .venv
                   fi
 
-                  echo 'Activating virtual environment...'
-                  source .venv/bin/activate
-
-                  echo 'Syncing dependencies...'
+                  # 2b️⃣ Sync dependencies from uv.lock
                   uv sync
 
-                  echo 'Installing extra dependencies...'
-                  uv add uvicorn gunicorn xmltodict
+                  # 2c️⃣ Ensure gunicorn is installed
+                  uv add gunicorn
 
-                  echo 'Restarting FastAPI app via PM2...'
+                  # 2d️⃣ Restart FastAPI service via PM2 using .venv binary
                   pm2 restart eltaxdevsvcserver-py
                 "
                 '''
@@ -56,14 +43,14 @@ pipeline {
 
     post {
         success {
-            emailext (
+            emailext(
                 body: 'FastAPI Backend successfully deployed. Please verify API is working.',
                 subject: '$PROJECT_NAME - Build #$BUILD_NUMBER - SUCCESS!',
-                to: ''
+                to: 'ghani.waheed@xevensolutions.com'
             )
         }
         failure {
-            emailext (
+            emailext(
                 attachLog: true,
                 body: 'FastAPI Backend deployment failed. Please check Jenkins logs.',
                 subject: '$PROJECT_NAME - Build #$BUILD_NUMBER - FAILED!',
@@ -72,3 +59,5 @@ pipeline {
         }
     }
 }
+
+
