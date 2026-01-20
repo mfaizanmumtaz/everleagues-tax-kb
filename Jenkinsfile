@@ -24,7 +24,7 @@ pipeline {
 
               # Ensure .venv exists
               if [ ! -d .venv ]; then
-                uv venv .venv
+                uv venv /var/www/eltaxdevsvcserver-py-be/.venv
               fi
               
               source .venv/bin/activate
