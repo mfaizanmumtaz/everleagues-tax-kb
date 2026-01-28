@@ -1,5 +1,7 @@
 """FastAPI application entry point."""
 
+
+
 from app.services.blob_storage_service import get_blob_storage_service
 from app.database.connection import async_engine
 from fastapi import FastAPI
@@ -9,7 +11,13 @@ from sqlalchemy import text
 from app.config import settings
 from app.routers import search, documents, dashboard, governance, urls, audit, upload
 from app.services.solr_service import get_solr_service
+import logging
 
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

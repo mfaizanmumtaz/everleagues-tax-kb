@@ -16,8 +16,9 @@ class Settings(BaseSettings):
     # ===========================================
     database_url: str = "postgresql://taxkb_user:password@localhost:5432/tax_kb"
     database_echo: bool = False  # SQL query logging
-    database_pool_size: int = 10
-    database_max_overflow: int = 20
+    database_pool_size: int = 50
+    database_max_overflow: int = 100
+    database_pool_timeout: int = 120
 
     # ===========================================
     # Solr Configuration

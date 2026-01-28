@@ -60,7 +60,7 @@ class DocumentRegistryService:
         scrape_job_id: UUID,
         document_name: str,
         source_url: Optional[str] = None,
-        title: Optional[str] = None,
+        title: Optional[str] = None, 
         jurisdiction: Optional[str] = None,
         state: Optional[str] = None,
         city: Optional[str] = None,

@@ -41,7 +41,7 @@ class SearchRequest(BaseModel):
         default=None, description="Search quality control parameters"
     )
     generate_answer: bool = Field(
-        default=True,
+        default=False,
         description="Whether to generate an LLM answer based on retrieved chunks",
     )
 

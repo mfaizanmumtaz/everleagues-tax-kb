@@ -1,5 +1,7 @@
 """File Upload API routes - using unified DocumentRegistry."""
 
+import logging
+
 import asyncio
 import json
 import os
@@ -31,6 +33,8 @@ from ..db_models.document_registry import ProcessingStatus
 from ..database.connection import AsyncSessionLocal
 
 router = APIRouter(prefix="/upload", tags=["File Upload"])
+
+logger = logging.getLogger(__name__)
 
 
 def _validate_file_size(file_size: int) -> None:
@@ -75,7 +79,10 @@ async def upload_file(
 ):
     """Upload a file and process it through the ingestion pipeline."""
     try:
+        logger.info(f"Upload started: filename={file.filename}, content_type={file.content_type}")
+        
         if not file.filename:
+
             raise HTTPException(status_code=400, detail="Filename is required")
 
         _validate_file_type(file.filename)
@@ -101,8 +108,10 @@ async def upload_file(
         stored_filename = f"{uuid4()}{file_ext}"
 
         try:
+            logger.info(f"Uploading to blob storage: {stored_filename}")
             blob_path, blob_url, checksum, stored_size = blob_service.upload_file(
                 container=settings.azure_container_uploads,
+
                 file_data=file_content,
                 filename=stored_filename,
                 folder=None,
@@ -113,10 +122,13 @@ async def upload_file(
                 },
             )
         except Exception as e:
+            logger.error(f"Blob storage upload failed: {str(e)}")
             raise HTTPException(
                 status_code=500,
                 detail=f"Failed to store file in blob storage: {str(e)}",
             )
+
+        logger.info(f"Blob upload complete")
 
         # Create DocumentRegistry entry with PENDING status
         registry_service = DocumentRegistryService(db)
@@ -153,10 +165,13 @@ async def upload_file(
 
             registry_id = str(registry.id)
         except Exception as e:
+            logger.error(f"Failed to create registry record: {str(e)}")
             raise HTTPException(
                 status_code=500,
                 detail=f"Failed to create registry record: {str(e)}",
             )
+
+        logger.info(f"Registry created: registry_id={registry_id}")
 
         response = FileUploadResponse(
             document_id="pending",
@@ -205,9 +220,11 @@ async def upload_file(
     except HTTPException:
         raise
     except Exception as e:
+        logger.exception(f"Unexpected error during file upload: {str(e)}")
         raise HTTPException(
             status_code=500, detail=f"Unexpected error during file upload: {str(e)}"
         )
+
 
 
 async def _process_uploaded_file(
@@ -221,7 +238,8 @@ async def _process_uploaded_file(
     upload_metadata: FileUploadMetadata,
 ):
     """Background task to process an uploaded file."""
-    
+    logger.info(f"Background processing started: registry_id={registry_id}, filename={original_filename}")
+
 
     async with AsyncSessionLocal() as db:
         registry_service = DocumentRegistryService(db)
@@ -237,9 +255,12 @@ async def _process_uploaded_file(
                     filename=original_filename,
                     mime_type=content_type,
                 )
+                logger.info(f"Text extraction complete: registry_id={registry_id}, success={parse_result.success if parse_result else False}")
             except Exception as e:
                 parse_result = None
                 extraction_error = str(e)
+                logger.error(f"Text extraction failed: registry_id={registry_id}, error={str(e)}")
+
 
             classification = None
             if parse_result and parse_result.success and parse_result.text:
@@ -309,13 +330,16 @@ async def _process_uploaded_file(
 
             try:
                 document = await doc_service.create_document(doc_create)
+                logger.info(f"Solr document created: registry_id={registry_id}, document_id={document.id}")
             except Exception as e:
+                logger.error(f"Failed to create Solr document: registry_id={registry_id}, error={str(e)}")
                 await registry_service.update_processing_status(
                     UUID(registry_id),
                     ProcessingStatus.FAILED,
                     error=f"Failed to create Solr document: {str(e)}",
                 )
                 return
+
 
             # Link registry to Solr document
             await registry_service.update_solr_reference(UUID(registry_id), document.id)
@@ -330,30 +354,38 @@ async def _process_uploaded_file(
                         text=parse_result.text,
                         generate_embeddings=True,
                     )
+                    logger.info(f"Chunking complete: registry_id={registry_id}, chunks_created={chunks_created}")
                     if errors:
                         processing_errors.extend(errors)
+                        logger.warning(f"Chunking had errors: registry_id={registry_id}, errors={errors[:3]}")
 
                     if chunks_created > 0:
                         await registry_service.update_chunk_count(
                             UUID(registry_id), chunks_created
                         )
                 except Exception as e:
+                    logger.error(f"Chunking failed: registry_id={registry_id}, error={str(e)}")
                     processing_errors.append(str(e))
             elif parse_result and not parse_result.success:
                 processing_errors.extend(parse_result.errors)
             elif not parse_result and extraction_error:
                 processing_errors.append(extraction_error)
 
+
             if chunks_created > 0:
                 await registry_service.update_processing_status(
                     UUID(registry_id), ProcessingStatus.COMPLETED
                 )
+                logger.info(f"Processing completed successfully: registry_id={registry_id}, chunks={chunks_created}")
             else:
+                error_msg = "; ".join(processing_errors[:3]) if processing_errors else "No chunks created"
+                logger.error(f"Processing failed: registry_id={registry_id}, error={error_msg}")
                 await registry_service.update_processing_status(
                     UUID(registry_id),
                     ProcessingStatus.FAILED,
-                    error="; ".join(processing_errors[:3]) if processing_errors else "No chunks created",
+                    error=error_msg,
                 )
+
 
             try:
                 audit_service = AuditLogService(db)
@@ -376,6 +408,7 @@ async def _process_uploaded_file(
                 pass
 
         except Exception as e:
+            logger.exception(f"Background processing failed: registry_id={registry_id}, error={str(e)}")
             try:
                 await registry_service.update_processing_status(
                     UUID(registry_id),

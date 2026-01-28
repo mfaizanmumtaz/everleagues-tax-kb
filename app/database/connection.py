@@ -31,6 +31,7 @@ async_engine = create_async_engine(
     pool_pre_ping=True,
     pool_size=settings.database_pool_size,
     max_overflow=settings.database_max_overflow,
+    pool_timeout=settings.database_pool_timeout,
     echo=settings.database_echo,
 )
 
@@ -59,7 +60,8 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 try:
     sync_engine = create_engine(
-        settings.database_url, pool_pre_ping=True, echo=settings.database_echo
+        settings.database_url, pool_pre_ping=True, echo=settings.database_echo, pool_size=50,max_overflow=100,      # Increase from 20
+    pool_timeout=80,       
     )
 except Exception:
     sync_engine = None
