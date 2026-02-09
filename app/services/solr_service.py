@@ -292,7 +292,7 @@ class SolrService:
         delete_cmd = {"delete": {"query": f"documentId:{document_id}"}}
         result = await self._make_request(
             "POST", url, params=params, json_data=delete_cmd
-        )
+        ) 
         return result.get("responseHeader", {}).get("status") == 0
 
     # ==================== Vector Search ====================

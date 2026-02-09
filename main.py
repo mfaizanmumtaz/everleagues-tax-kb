@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from sqlalchemy import text
 from app.config import settings
-from app.routers import search, documents, dashboard, governance, urls, audit, upload, discovery
+from app.routers import search, documents, dashboard, governance, urls, audit, upload, discovery, api_push
 from app.services.solr_service import get_solr_service
 
 
@@ -103,6 +103,7 @@ app.include_router(urls.router, prefix=settings.api_prefix)
 app.include_router(discovery.router, prefix=settings.api_prefix)
 app.include_router(audit.router, prefix=settings.api_prefix)
 app.include_router(upload.router, prefix=settings.api_prefix)
+app.include_router(api_push.router, prefix=settings.api_prefix)
 
 
 @app.get("/")

@@ -1,5 +1,5 @@
 """Database connection and session management."""
-
+import asyncio
 from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from typing import AsyncGenerator
@@ -25,7 +25,7 @@ def get_async_database_url(url: str) -> str:
 
 async_database_url = get_async_database_url(settings.database_url)
 
-# Async engine with connection pooling
+# Async engine with connection pooling 
 async_engine = create_async_engine(
     async_database_url,
     pool_pre_ping=True,
@@ -83,7 +83,6 @@ def init_db() -> None:
     if sync_engine:
         Base.metadata.create_all(bind=sync_engine)
     else:
-        import asyncio
 
         async def async_init():
             async with async_engine.begin() as conn:

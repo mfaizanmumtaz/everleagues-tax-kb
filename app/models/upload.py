@@ -6,7 +6,9 @@ from .document import DocumentResponse
 from ..config.jurisdiction_config import (
     get_valid_states,
     get_valid_doc_types,
+    get_valid_cities,
     is_valid_state,
+    is_valid_city,
 )
 
 
@@ -97,6 +99,15 @@ class FileUploadMetadata(BaseModel):
                 raise ValueError(
                     "city is required when jurisdiction is 'local'"
                 )
+            # Validate city is valid for the given state
+            if state and city:
+                valid_cities = get_valid_cities(state.upper())
+                if valid_cities and city not in valid_cities:
+                    # Only validate if we have city data for this state
+                    raise ValueError(
+                        f"Invalid city '{city}' for state '{state.upper()}'. "
+                        f"Valid cities include: {', '.join(valid_cities[:5])}{'...' if len(valid_cities) > 5 else ''}"
+                    )
 
         return self
 

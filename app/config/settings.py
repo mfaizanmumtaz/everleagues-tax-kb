@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     azure_container_raw: str = "raw-documents"
     azure_container_processed: str = "processed-documents"
     azure_container_uploads: str = "uploads"
+    azure_container_api_pushed: str = "api-pushed"
 
     # ===========================================
     # Embedding Configuration

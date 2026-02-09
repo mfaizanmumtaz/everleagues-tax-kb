@@ -1,5 +1,6 @@
-"""File Upload API routes - using unified DocumentRegistry."""
+"""API Push routes - for external API download service to push files."""
 
+import logging
 import asyncio
 import json
 import os
@@ -14,23 +15,26 @@ from fastapi import (
     Form,
     Depends,
     BackgroundTasks,
+    Query,
+    Path,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
 from ..models.upload import FileUploadMetadata, FileUploadResponse
 from ..models.document import DocumentCreate
-from ..database.connection import get_db
+from ..database.connection import get_db, AsyncSessionLocal
 from ..services.blob_storage_service import get_blob_storage_service
 from ..services.file_parser import get_file_parser_service
 from ..services.document_service import get_document_service
 from ..services.document_classifier_service import get_document_classifier_service
 from ..services.audit_log_service import AuditLogService
 from ..services.document_registry_service import DocumentRegistryService
-from ..db_models.document_registry import ProcessingStatus
-from ..database.connection import AsyncSessionLocal
+from ..db_models.document_registry import ProcessingStatus, SourceType
 
-router = APIRouter(prefix="/upload", tags=["File Upload"])
+router = APIRouter(prefix="/push", tags=["API Push"])
+
+logger = logging.getLogger(__name__)
 
 
 def _validate_file_size(file_size: int) -> None:
@@ -67,14 +71,22 @@ def _parse_metadata(metadata_str: Optional[str]) -> FileUploadMetadata:
 
 
 @router.post("", response_model=FileUploadResponse, status_code=201)
-async def upload_file(
-    file: UploadFile = File(..., description="File to upload"),
+async def push_file(
+    file: UploadFile = File(..., description="File to push"),
+    file_id: str = Form(..., description="External file ID from API download service"),
     metadata: str = Form(None, description="JSON string with document metadata"),
     db: AsyncSession = Depends(get_db),
     background_tasks: BackgroundTasks = None,
 ):
-    """Upload a file and process it through the ingestion pipeline."""
+    """
+    Push a file from an external API download service.
+    
+    If a file with the same file_id already exists, it will be replaced
+    and flagged for review.
+    """
     try:
+        logger.info(f"API Push started: file_id={file_id}, filename={file.filename}")
+        
         if not file.filename:
             raise HTTPException(status_code=400, detail="Filename is required")
 
@@ -97,34 +109,32 @@ async def upload_file(
                 status_code=503, detail="Azure Blob Storage is not configured"
             )
 
-        file_ext = os.path.splitext(file.filename)[1].lower()
-        stored_filename = f"{uuid4()}{file_ext}"
-
-        try:
-            blob_path, blob_url, checksum, stored_size = blob_service.upload_file( 
-                container=settings.azure_container_uploads,
-                file_data=file_content,
-                filename=stored_filename,
-                folder=None,
-                metadata={
-                    "upload_source": "api",
-                    "original_filename": file.filename,
-                    "content_type": file.content_type or "application/octet-stream",
-                },
-            )
-        except Exception as e:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to store file in blob storage: {str(e)}",
-            )
-
-        # Create DocumentRegistry entry with PENDING status
+        # Check if file_id already exists (replacement scenario)
         registry_service = DocumentRegistryService(db)
-
-        try:
-            registry = await registry_service.create_for_upload(
+        existing_registry = await registry_service.get_by_external_file_id(file_id)
+        is_replacement = existing_registry is not None
+        
+        if is_replacement:
+            logger.info(f"Replacement detected for file_id={file_id}, existing registry_id={existing_registry.id}")
+            
+            # Delete old Solr document and chunks if exists
+            if existing_registry.solr_document_id:
+                try:
+                    doc_service = get_document_service()
+                    await doc_service.delete_document(existing_registry.solr_document_id)
+                    logger.info(f"Deleted old Solr document: {existing_registry.solr_document_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete old Solr document: {e}")
+            
+            # Mark for replacement (sets needs_review=True)
+            await registry_service.mark_for_replacement(existing_registry.id)
+            registry_id = str(existing_registry.id)
+        else:
+            # Create new registry entry
+            registry = await registry_service.create_for_api_push(
+                external_file_id=file_id,
                 document_name=file.filename,
-                source_url=blob_url,
+                source_url=None,
                 title=upload_metadata.title,
                 jurisdiction=upload_metadata.jurisdiction,
                 state=upload_metadata.state,
@@ -132,54 +142,77 @@ async def upload_file(
                 tax_year=upload_metadata.tax_year,
                 doc_type=upload_metadata.doc_type,
             )
-
-            # Create blob record
-            await registry_service.create_blob(
-                registry_id=registry.id,
-                blob_type="raw",
-                blob_container=settings.azure_container_uploads,
-                blob_path=blob_path,
-                blob_url=blob_url,
-                original_filename=file.filename,
-                file_size=file_size,
-                mime_type=file.content_type,
-                content_hash=checksum,
-            )
-
-            # Update status to PROCESSING
-            await registry_service.update_processing_status(
-                registry.id, ProcessingStatus.PROCESSING
-            )
-
             registry_id = str(registry.id)
+
+        # Upload to API-pushed container
+        file_ext = os.path.splitext(file.filename)[1].lower()
+        stored_filename = f"{uuid4()}{file_ext}"
+
+        try:
+            logger.info(f"Uploading to blob storage (api-pushed): {stored_filename}")
+            blob_path, blob_url, checksum, stored_size = blob_service.upload_file(
+                container=settings.azure_container_api_pushed,
+                file_data=file_content,
+                filename=stored_filename,
+                folder=None,
+                metadata={
+                    "upload_source": "api_push",
+                    "external_file_id": file_id,
+                    "original_filename": file.filename,
+                    "content_type": file.content_type or "application/octet-stream",
+                    "is_replacement": str(is_replacement),
+                },
+            )
         except Exception as e:
+            logger.error(f"Blob storage upload failed: {str(e)}")
             raise HTTPException(
                 status_code=500,
-                detail=f"Failed to create registry record: {str(e)}",
+                detail=f"Failed to store file in blob storage: {str(e)}",
             )
+
+        logger.info(f"Blob upload complete for file_id={file_id}")
+
+        # Create blob record
+        await registry_service.create_blob(
+            registry_id=UUID(registry_id),
+            blob_type="raw",
+            blob_container=settings.azure_container_api_pushed,
+            blob_path=blob_path,
+            blob_url=blob_url,
+            original_filename=file.filename,
+            file_size=file_size,
+            mime_type=file.content_type,
+            content_hash=checksum,
+        )
+
+        # Update status to PROCESSING
+        await registry_service.update_processing_status(
+            UUID(registry_id), ProcessingStatus.PROCESSING
+        )
 
         response = FileUploadResponse(
             document_id="pending",
-            uploaded_file_id=None,  # Deprecated
+            uploaded_file_id=None,
             registry_id=registry_id,
             filename=file.filename,
             file_size=file_size,
             blob_path=blob_path,
             blob_url=blob_url,
             content_type=file.content_type or "application/octet-stream",
-            status="processing",
+            status="processing" if not is_replacement else "replacing",
             chunks_created=0,
             word_count=0,
             page_count=0,
             parsing_quality=0.0,
-            message="File uploaded successfully. Processing in background...",
+            message=f"File {'replaced' if is_replacement else 'pushed'} successfully. Processing in background...",
             document=None,
         )
 
         if background_tasks:
             background_tasks.add_task(
-                _process_uploaded_file,
+                _process_pushed_file,
                 registry_id=registry_id,
+                file_id=file_id,
                 file_content=file_content,
                 original_filename=file.filename,
                 content_type=file.content_type,
@@ -187,10 +220,12 @@ async def upload_file(
                 blob_path=blob_path,
                 blob_url=blob_url,
                 upload_metadata=upload_metadata,
+                is_replacement=is_replacement,
             )
         else:
-            await _process_uploaded_file(
+            await _process_pushed_file(
                 registry_id=registry_id,
+                file_id=file_id,
                 file_content=file_content,
                 original_filename=file.filename,
                 content_type=file.content_type,
@@ -198,6 +233,7 @@ async def upload_file(
                 blob_path=blob_path,
                 blob_url=blob_url,
                 upload_metadata=upload_metadata,
+                is_replacement=is_replacement,
             )
 
         return response
@@ -205,13 +241,15 @@ async def upload_file(
     except HTTPException:
         raise
     except Exception as e:
+        logger.exception(f"Unexpected error during API push: {str(e)}")
         raise HTTPException(
-            status_code=500, detail=f"Unexpected error during file upload: {str(e)}"
+            status_code=500, detail=f"Unexpected error during API push: {str(e)}"
         )
 
 
-async def _process_uploaded_file(
+async def _process_pushed_file(
     registry_id: str,
+    file_id: str,
     file_content: bytes,
     original_filename: str,
     content_type: str,
@@ -219,9 +257,10 @@ async def _process_uploaded_file(
     blob_path: str,
     blob_url: str,
     upload_metadata: FileUploadMetadata,
+    is_replacement: bool,
 ):
-    """Background task to process an uploaded file."""
-    
+    """Background task to process an API-pushed file."""
+    logger.info(f"Background processing started: registry_id={registry_id}, file_id={file_id}, replacement={is_replacement}")
 
     async with AsyncSessionLocal() as db:
         registry_service = DocumentRegistryService(db)
@@ -237,9 +276,11 @@ async def _process_uploaded_file(
                     filename=original_filename,
                     mime_type=content_type,
                 )
+                logger.info(f"Text extraction complete: registry_id={registry_id}")
             except Exception as e:
                 parse_result = None
                 extraction_error = str(e)
+                logger.error(f"Text extraction failed: {str(e)}")
 
             classification = None
             if parse_result and parse_result.success and parse_result.text:
@@ -309,7 +350,9 @@ async def _process_uploaded_file(
 
             try:
                 document = await doc_service.create_document(doc_create)
+                logger.info(f"Solr document created: document_id={document.id}")
             except Exception as e:
+                logger.error(f"Failed to create Solr document: {str(e)}")
                 await registry_service.update_processing_status(
                     UUID(registry_id),
                     ProcessingStatus.FAILED,
@@ -330,14 +373,17 @@ async def _process_uploaded_file(
                         text=parse_result.text,
                         generate_embeddings=True,
                     )
+                    logger.info(f"Chunking complete: chunks_created={chunks_created}")
                     if errors:
                         processing_errors.extend(errors)
+                        logger.warning(f"Chunking had errors: {errors[:3]}")
 
                     if chunks_created > 0:
                         await registry_service.update_chunk_count(
                             UUID(registry_id), chunks_created
                         )
                 except Exception as e:
+                    logger.error(f"Chunking failed: {str(e)}")
                     processing_errors.append(str(e))
             elif parse_result and not parse_result.success:
                 processing_errors.extend(parse_result.errors)
@@ -348,34 +394,41 @@ async def _process_uploaded_file(
                 await registry_service.update_processing_status(
                     UUID(registry_id), ProcessingStatus.COMPLETED
                 )
+                logger.info(f"Processing completed successfully: registry_id={registry_id}")
             else:
+                error_msg = "; ".join(processing_errors[:3]) if processing_errors else "No chunks created"
+                logger.error(f"Processing failed: {error_msg}")
                 await registry_service.update_processing_status(
                     UUID(registry_id),
                     ProcessingStatus.FAILED,
-                    error="; ".join(processing_errors[:3]) if processing_errors else "No chunks created",
+                    error=error_msg,
                 )
 
+            # Audit log
             try:
                 audit_service = AuditLogService(db)
                 await audit_service.log_action(
-                    action="document.upload",
+                    action="document.api_push" if not is_replacement else "document.api_replace",
                     resource_type="document",
                     resource_id=document.id,
                     resource_name=original_filename,
-                    actor="api",
+                    actor="api_push_service",
                     new_values={
                         "filename": original_filename,
+                        "file_id": file_id,
                         "file_size": file_size,
                         "blob_path": blob_path,
                         "chunks_created": chunks_created,
                         "registry_id": registry_id,
+                        "is_replacement": is_replacement,
                     },
-                    details=f"File processed in background. Chunks: {chunks_created}",
+                    details=f"File {'replaced' if is_replacement else 'pushed'} via API. Chunks: {chunks_created}",
                 )
             except Exception:
                 pass
 
         except Exception as e:
+            logger.exception(f"Background processing failed: {str(e)}")
             try:
                 await registry_service.update_processing_status(
                     UUID(registry_id),
@@ -384,3 +437,110 @@ async def _process_uploaded_file(
                 )
             except Exception:
                 pass
+
+
+@router.get("/list")
+async def list_pushed_files(
+    page: int = Query(default=1, ge=1, description="Page number"),
+    limit: int = Query(default=20, ge=1, le=100, description="Items per page"),
+    needs_review: Optional[bool] = Query(default=None, description="Filter by review status"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    List all files pushed via the API download service.
+    
+    Used for sync operations or to identify files needing review after replacement.
+    """
+    try:
+        registry_service = DocumentRegistryService(db)
+        offset = (page - 1) * limit
+        
+        registries = await registry_service.list_by_source_type(
+            source_type=SourceType.API,
+            limit=limit,
+            offset=offset,
+        )
+        
+        # Filter by needs_review if specified
+        if needs_review is not None:
+            registries = [r for r in registries if r.needs_review == needs_review]
+        
+        items = [
+            {
+                "registry_id": str(r.id),
+                "external_file_id": r.external_file_id,
+                "document_name": r.document_name,
+                "title": r.title,
+                "processing_status": r.processing_status.value if r.processing_status else None,
+                "solr_document_id": r.solr_document_id,
+                "needs_review": r.needs_review,
+                "replaced_at": r.replaced_at.isoformat() if r.replaced_at else None,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "jurisdiction": r.jurisdiction,
+                "state": r.state,
+                "chunk_count": r.chunk_count,
+            }
+            for r in registries
+        ]
+        
+        return {
+            "items": items,
+            "page": page,
+            "limit": limit,
+            "total": len(items),
+        }
+    except Exception as e:
+        logger.exception(f"Error listing pushed files: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/{file_id}", status_code=204)
+async def delete_pushed_file(
+    file_id: str = Path(..., description="External file ID"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Delete a file that was pushed via the API download service.
+    
+    Removes the document from Solr, blob storage, and the registry.
+    """
+    try:
+        registry_service = DocumentRegistryService(db)
+        
+        # Find by external file_id
+        registry = await registry_service.get_by_external_file_id(file_id)
+        
+        if not registry:
+            raise HTTPException(
+                status_code=404,
+                detail=f"File with ID '{file_id}' not found"
+            )
+        
+        # Delete from Solr if exists
+        if registry.solr_document_id:
+            try:
+                doc_service = get_document_service()
+                await doc_service.delete_document(registry.solr_document_id)
+                logger.info(f"Deleted Solr document: {registry.solr_document_id}")
+            except Exception as e:
+                logger.warning(f"Failed to delete Solr document: {e}")
+        
+        # Delete blob(s)
+        blob_service = get_blob_storage_service()
+        for blob in registry.blobs:
+            try:
+                blob_service.delete_file(blob.blob_container, blob.blob_path)
+                logger.info(f"Deleted blob: {blob.blob_path}")
+            except Exception as e:
+                logger.warning(f"Failed to delete blob: {e}")
+        
+        # Delete registry (cascades to blobs table)
+        await registry_service.delete(registry.id)
+        
+        logger.info(f"Deleted pushed file: file_id={file_id}, registry_id={registry.id}")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error deleting pushed file: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))

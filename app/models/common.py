@@ -1,8 +1,15 @@
 """Common Pydantic models for pagination and filtering."""
 
 from typing import Optional, Generic, TypeVar, List, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from enum import Enum
+
+from ..config.jurisdiction_config import (
+    is_valid_state,
+    is_valid_city,
+    get_valid_states,
+    get_valid_cities,
+)
 
 
 class GovernanceState(str, Enum):
@@ -82,6 +89,81 @@ class FilterParams(BaseModel):
     is_latest_for_tax_year: Optional[bool] = Field(
         default=None, description="Filter for latest version only"
     )
+
+    @model_validator(mode="after")
+    def validate_jurisdiction_requirements(self):
+        """
+        Validate jurisdiction-related filter requirements.
+        
+        This validation is optional - only triggered when jurisdiction is provided.
+        Rules:
+        - If jurisdiction is 'state': state code is required
+        - If jurisdiction is 'local': both state code and city are required
+        - State code must be a valid US state code
+        - City must be valid for the specified state (if city data exists)
+        """
+        jurisdiction = self.jurisdiction
+        state = self.state
+        city = self.city
+
+        # Only validate if jurisdiction is provided
+        if jurisdiction:
+            jurisdiction_lower = jurisdiction.lower()
+            
+            # Validate jurisdiction value itself
+            valid_jurisdictions = ["federal", "state", "local"]
+            if jurisdiction_lower not in valid_jurisdictions:
+                raise ValueError(
+                    f"Invalid jurisdiction '{jurisdiction}'. "
+                    f"Must be one of: {', '.join(valid_jurisdictions)}"
+                )
+            
+            # State jurisdiction requires state code
+            if jurisdiction_lower == "state":
+                if not state:
+                    raise ValueError(
+                        "When filtering by 'state' jurisdiction, please provide a state code "
+                        "(e.g., CA, NY, TX) using the 'state' parameter"
+                    )
+            
+            # Local jurisdiction requires both state and city
+            if jurisdiction_lower == "local":
+                missing = []
+                if not state:
+                    missing.append("state code (e.g., CA, NY)")
+                if not city:
+                    missing.append("city name (e.g., Los Angeles, New York)")
+                if missing:
+                    raise ValueError(
+                        f"When filtering by 'local' jurisdiction, please provide: "
+                        f"{' and '.join(missing)}"
+                    )
+
+        # Validate state code if provided (regardless of jurisdiction filter)
+        if state:
+            state_upper = state.upper()
+            if not is_valid_state(state_upper):
+                valid_states = get_valid_states()
+                sample_states = sorted(valid_states)[:10]
+                raise ValueError(
+                    f"Invalid state code '{state}'. "
+                    f"Please use a valid 2-letter US state code. "
+                    f"Examples: {', '.join(sample_states)}..."
+                )
+
+        # Validate city if provided with a state
+        if city and state:
+            valid_cities = get_valid_cities(state.upper())
+            if valid_cities and city not in valid_cities:
+                # Only validate if we have city data for this state
+                sample_cities = valid_cities[:5]
+                raise ValueError(
+                    f"Invalid city '{city}' for state '{state.upper()}'. "
+                    f"Valid cities include: {', '.join(sample_cities)}"
+                    f"{'...' if len(valid_cities) > 5 else ''}"
+                )
+
+        return self
 
 
 T = TypeVar("T")
