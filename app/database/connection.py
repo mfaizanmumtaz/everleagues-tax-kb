@@ -70,7 +70,6 @@ def init_db() -> None:
     from .base import Base
     from ..db_models import (
         ScrapeUrl,
-        ApiCredential,
         ScrapeJob,
         ScrapeJobLog,
         DocumentRegistry,
@@ -78,6 +77,7 @@ def init_db() -> None:
         GovernanceTransition,
         AuditLog,
         SystemSetting,
+        ApiSource,
     )
 
     if sync_engine:

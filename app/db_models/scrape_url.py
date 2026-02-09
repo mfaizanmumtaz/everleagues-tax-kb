@@ -5,12 +5,9 @@ from sqlalchemy import (
     String,
     Integer,
     DateTime,
-    ForeignKey,
     Text,
     Enum,
-    LargeBinary,
 )
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 import enum
 
@@ -21,7 +18,6 @@ class DataSourceType(str, enum.Enum):
     """Data source type enumeration."""
 
     SCRAPE = "scrape"
-    API = "api"
     FILE = "file"
 
 
@@ -98,12 +94,6 @@ class ScrapeUrl(Base, UUIDMixin, TimestampMixin):
     last_successful_at = Column(DateTime(timezone=True))
 
     # Relationships
-    api_credential = relationship(
-        "ApiCredential",
-        back_populates="scrape_url",
-        uselist=False,
-        cascade="all, delete-orphan",
-    )
     scrape_jobs = relationship(
         "ScrapeJob", back_populates="scrape_url", cascade="all, delete-orphan"
     )
@@ -114,26 +104,3 @@ class ScrapeUrl(Base, UUIDMixin, TimestampMixin):
     path_rules = relationship(
         "PathRule", back_populates="scrape_url", cascade="all, delete-orphan"
     )
-
-
-class ApiCredential(Base, UUIDMixin, TimestampMixin):
-    """API credentials for data_source = 'api'."""
-
-    __tablename__ = "api_credentials"
-
-    # Foreign key
-    scrape_url_id = Column(
-        UUID(as_uuid=True),
-        ForeignKey("scrape_urls.id", ondelete="CASCADE"),
-        nullable=False,
-        unique=True,
-        index=True,
-    )
-
-    # API Configuration
-    api_endpoint = Column(Text, nullable=False)
-    api_key_encrypted = Column(LargeBinary)  # Encrypted
-    auth_type = Column(String(50), default="bearer")  # bearer, basic, api_key
-
-    # Relationships
-    scrape_url = relationship("ScrapeUrl", back_populates="api_credential")

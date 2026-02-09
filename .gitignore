@@ -30,13 +30,6 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-# Local env files
-.env
-.env*.local
-.env.development.local
-.env.test.local
-.env.production.local
-.env.local
 
 # Vercel
 .vercel
@@ -126,5 +119,5 @@ manage_solr9/
 backend/COMPREHENSIVE_LINK_CLASSIFICATION_REPORT.txt
 test/
 data/
-frentend/
 tests/
+frontend/

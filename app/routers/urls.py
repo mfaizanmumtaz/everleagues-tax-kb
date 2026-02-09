@@ -1,7 +1,8 @@
 """URL Management API routes with PostgreSQL persistence."""
 
+import asyncio
 from fastapi import APIRouter, HTTPException, Query, Path, BackgroundTasks, Depends
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime
 from uuid import UUID
 from pydantic import BaseModel, Field
@@ -11,6 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database.connection import get_db
 from ..services.url_db_service import UrlDbService
 from ..services.audit_log_service import AuditLogService
+from ..services.scrape_job_service import ScrapeJobService
+from ..db_models.scrape_job import JobStatus
+from ..services.scrape_service import run_scrape
 from ..db_models.scrape_url import (
     DataSourceType as DbDataSourceType,
     ScheduleFrequency as DbScheduleFrequency,
@@ -27,7 +31,6 @@ class DataSource(str, Enum):
     """Data source type."""
 
     SCRAPE = "scrape"
-    API = "api"
     FILE = "file"
 
 
@@ -68,12 +71,6 @@ class URLBase(BaseModel):
     schedule_frequency: ScheduleFrequency = Field(
         default=ScheduleFrequency.ON_DEMAND, description="Scraping schedule"
     )
-    api_key: Optional[str] = Field(
-        default=None, description="API key if data source is API"
-    )
-    api_endpoint: Optional[str] = Field(
-        default=None, description="API endpoint if data source is API"
-    )
 
 
 class URLCreate(URLBase):
@@ -102,8 +99,6 @@ class URLUpdate(BaseModel):
     city: Optional[str] = None
     data_source: Optional[DataSource] = None
     schedule_frequency: Optional[ScheduleFrequency] = None
-    api_key: Optional[str] = None
-    api_endpoint: Optional[str] = None
     status: Optional[URLStatus] = None
     delay_between_requests: Optional[int] = None
     max_requests_per_minute: Optional[int] = None
@@ -151,10 +146,14 @@ class ScrapeProgress(BaseModel):
     """Scraping progress response."""
 
     url_id: str
-    status: str
+    job_id: Optional[str] = None
+    status: str = "idle"
     current: int = 0
     total: int = 0
     message: str = ""
+    documents_created: int = 0
+    documents_failed: int = 0
+    started_at: Optional[str] = None
 
 
 # ==================== Helper Functions ====================
@@ -164,7 +163,6 @@ def _map_data_source(api_value: DataSource) -> DbDataSourceType:
     """Map API data source to DB enum."""
     mapping = {
         DataSource.SCRAPE: DbDataSourceType.SCRAPE,
-        DataSource.API: DbDataSourceType.API,
         DataSource.FILE: DbDataSourceType.FILE,
     }
     return mapping.get(api_value, DbDataSourceType.SCRAPE)
@@ -194,8 +192,8 @@ def _map_url_status(api_value: URLStatus) -> DbUrlStatus:
     return mapping.get(api_value, DbUrlStatus.ACTIVE)
 
 
-# In-memory storage for scrape progress (temporary until we implement job tracking)
-_scrape_tasks: dict = {}
+# Active scrape cancellation events keyed by url_id
+_active_scrapes: Dict[str, asyncio.Event] = {}
 
 
 # ==================== API Endpoints ====================
@@ -299,8 +297,6 @@ async def create_url(
             city=url_data.city,
             data_source=_map_data_source(url_data.data_source),
             schedule_frequency=_map_schedule_frequency(url_data.schedule_frequency),
-            api_endpoint=url_data.api_endpoint,
-            api_key=url_data.api_key,
             delay_between_requests=url_data.delay_between_requests,
             max_requests_per_minute=url_data.max_requests_per_minute,
             max_files_per_session=url_data.max_files_per_session,
@@ -403,10 +399,12 @@ async def trigger_scrape(
     """
     Trigger scraping for a URL.
 
-    Starts a background task to scrape the URL.
+    Downloads all approved discovered pages and processes them through
+    the full ingestion pipeline (blob, parse, classify, chunk, embed, Solr).
     """
     try:
         url_service = UrlDbService(db)
+        job_service = ScrapeJobService(db)
 
         scrape_url = await url_service.get_url(UUID(url_id))
         if not scrape_url:
@@ -414,79 +412,44 @@ async def trigger_scrape(
 
         # Check if already scraping
         if scrape_url.status == DbUrlStatus.SCRAPING:
-            return ScrapeProgress(
-                url_id=url_id,
-                status="scraping",
-                current=_scrape_tasks.get(url_id, {}).get("current", 0),
-                total=_scrape_tasks.get(url_id, {}).get("total", 0),
-                message="Scraping already in progress",
-            )
+            # Return progress of the current job
+            jobs, _ = await job_service.get_jobs_for_url(UUID(url_id), page=1, limit=1)
+            if jobs and jobs[0].status.value == "running":
+                job = jobs[0]
+                return ScrapeProgress(
+                    url_id=url_id,
+                    job_id=str(job.id),
+                    status="running",
+                    current=job.progress_current or 0,
+                    total=job.progress_total or 0,
+                    message=job.progress_message or "Scraping in progress",
+                    documents_created=job.documents_created or 0,
+                    documents_failed=job.documents_failed or 0,
+                    started_at=job.started_at.isoformat() if job.started_at else None,
+                )
 
-        # Update status to scraping
-        await url_service.update_url_status(UUID(url_id), DbUrlStatus.SCRAPING)
+        # Create a new scrape job
+        job = await job_service.create_job(UUID(url_id), triggered_by="manual")
 
-        # Initialize progress
-        _scrape_tasks[url_id] = {
-            "status": "started",
-            "current": 0,
-            "total": 0,
-            "message": "Starting scrape...",
-        }
+        # Set up cancellation event
+        cancel_event = asyncio.Event()
+        _active_scrapes[url_id] = cancel_event
 
-        # Background task for scraping (mock implementation)
-        async def do_scrape(uid: str, url_string: str):
-            import asyncio
-            from ..database.connection import AsyncSessionLocal
-
-            try:
-                _scrape_tasks[uid]["message"] = "Scanning URL..."
-                _scrape_tasks[uid]["total"] = 10
-
-                for i in range(10):
-                    await asyncio.sleep(0.5)
-                    _scrape_tasks[uid]["current"] = i + 1
-                    _scrape_tasks[uid]["message"] = f"Processing document {i + 1}/10"
-
-                _scrape_tasks[uid]["status"] = "completed"
-                _scrape_tasks[uid]["message"] = "Scraping completed"
-
-                # Update database with new session
-                async with AsyncSessionLocal() as db_session:
-                    svc = UrlDbService(db_session)
-                    audit_svc = AuditLogService(db_session)
-
-                    await svc.update_url_status(UUID(uid), DbUrlStatus.ACTIVE)
-                    await svc.update_scrape_stats(
-                        UUID(uid),
-                        last_scraped_at=datetime.utcnow(),
-                        last_successful_at=datetime.utcnow(),
-                    )
-                    await svc.increment_documents_count(UUID(uid), 10)
-
-                    # Log the scrape action
-                    await audit_svc.log_url_scrape(
-                        url_id=uid,
-                        url=url_string,
-                        documents_created=10,
-                    )
-
-            except Exception as e:
-                _scrape_tasks[uid]["status"] = "error"
-                _scrape_tasks[uid]["message"] = str(e)
-
-                # Update database with error status
-                async with AsyncSessionLocal() as db_session:
-                    svc = UrlDbService(db_session)
-                    await svc.update_url_status(UUID(uid), DbUrlStatus.ERROR, str(e))
-
-        background_tasks.add_task(do_scrape, url_id, scrape_url.url)
+        # Launch the real scraping as a background task
+        background_tasks.add_task(
+            run_scrape,
+            scrape_url_id=url_id,
+            job_id=str(job.id),
+            cancellation_event=cancel_event,
+        )
 
         return ScrapeProgress(
             url_id=url_id,
-            status="started",
+            job_id=str(job.id),
+            status="pending",
             current=0,
             total=0,
-            message="Scraping started",
+            message="Scrape job created, starting...",
         )
     except HTTPException:
         raise
@@ -500,33 +463,79 @@ async def get_scrape_progress(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Get scraping progress for a URL.
+    Get scraping progress for a URL. Returns the latest job's progress.
     """
     try:
         url_service = UrlDbService(db)
+        job_service = ScrapeJobService(db)
 
         scrape_url = await url_service.get_url(UUID(url_id))
         if not scrape_url:
             raise HTTPException(status_code=404, detail="URL not found")
 
-        progress = _scrape_tasks.get(
-            url_id,
-            {
-                "status": "idle",
-                "current": 0,
-                "total": 0,
-                "message": "No active scraping task",
-            },
-        )
+        # Get the most recent job for this URL
+        jobs, _ = await job_service.get_jobs_for_url(UUID(url_id), page=1, limit=1)
+
+        if not jobs:
+            return ScrapeProgress(
+                url_id=url_id,
+                status="idle",
+                message="No scraping jobs found",
+            )
+
+        job = jobs[0]
+
+        # Detect stale running jobs (background task crashed but never updated status)
+        job_status = job.status.value if job.status else "idle"
+        if job_status == "running" and url_id not in _active_scrapes:
+            # No active background task for this job -- it crashed
+            job_status = "failed"
+            job.status = JobStatus.FAILED
+            job.progress_message = "Job stopped unexpectedly"
+            try:
+                await db.commit()
+            except Exception:
+                pass
 
         return ScrapeProgress(
             url_id=url_id,
-            status=progress.get("status", "idle"),
-            current=progress.get("current", 0),
-            total=progress.get("total", 0),
-            message=progress.get("message", ""),
+            job_id=str(job.id),
+            status=job_status,
+            current=job.progress_current or 0,
+            total=job.progress_total or 0,
+            message=job.progress_message or "",
+            documents_created=job.documents_created or 0,
+            documents_failed=job.documents_failed or 0,
+            started_at=job.started_at.isoformat() if job.started_at else None,
         )
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{url_id}/scrape/cancel")
+async def cancel_scrape(
+    url_id: str = Path(..., description="URL ID"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Cancel an active scrape for a URL.
+    """
+    try:
+        cancel_event = _active_scrapes.get(url_id)
+        if cancel_event:
+            cancel_event.set()
+            _active_scrapes.pop(url_id, None)
+            return {"message": "Cancellation signal sent", "url_id": url_id}
+
+        # No active scrape found, try to cancel the latest running job
+        job_service = ScrapeJobService(db)
+        jobs, _ = await job_service.get_jobs_for_url(UUID(url_id), page=1, limit=1)
+        if jobs and jobs[0].status.value == "running":
+            await job_service.cancel_job(jobs[0].id)
+            return {"message": "Job cancelled", "url_id": url_id}
+
+        return {"message": "No active scrape to cancel", "url_id": url_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

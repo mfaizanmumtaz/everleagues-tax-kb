@@ -39,6 +39,11 @@ class DiscoveryStatusResponse(BaseModel):
     status: str
     pages_discovered: int = 0
     message: str = ""
+    queue_size: int = 0
+    current_depth: int = 0
+    recent_urls: List[dict] = Field(default_factory=list)
+    rules_refreshed_count: int = 0
+    urls_skipped_by_rules: int = 0
 
 
 class PageStatusEnum(str, Enum):
@@ -182,24 +187,40 @@ async def start_discovery(
             raise HTTPException(status_code=404, detail="URL not found")
         
         # Check if already discovering
-        if url_id in _discovery_status and _discovery_status[url_id]["status"] == "running":
+        if url_id in _discovery_status and _discovery_status[url_id].get("status") in (
+            "running", "paused"
+        ):
+            state = _discovery_status[url_id]
             return DiscoveryStatusResponse(
                 url_id=url_id,
-                status="running",
-                pages_discovered=_discovery_status[url_id].get("pages", 0),
+                status=state["status"],
+                pages_discovered=state.get("pages_discovered", 0),
                 message="Discovery already in progress",
+                queue_size=state.get("queue_size", 0),
+                current_depth=state.get("current_depth", 0),
+                recent_urls=state.get("recent_urls", []),
+                rules_refreshed_count=state.get("rules_refreshed_count", 0),
+                urls_skipped_by_rules=state.get("urls_skipped_by_rules", 0),
             )
         
-        # Initialize status
+        # Initialize status (this dict is shared with the crawl loop)
         _discovery_status[url_id] = {
+            "command": "running",
             "status": "running",
-            "pages": 0,
+            "pages_discovered": 0,
+            "queue_size": 0,
+            "current_depth": 0,
+            "recent_urls": [],
             "message": "Starting discovery...",
+            "rules_refreshed_count": 0,
+            "urls_skipped_by_rules": 0,
         }
         
         # Background discovery task
         async def run_discovery():
             from ..database.connection import AsyncSessionLocal
+            
+            crawl_state = _discovery_status[url_id]
             
             async with AsyncSessionLocal() as session:
                 try:
@@ -210,12 +231,12 @@ async def start_discovery(
                     if request.add_common_blocks:
                         await path_rule_service.add_common_blocks(UUID(url_id))
                     
-                    # Get path rules
+                    # Get initial path rules
                     rules = await path_rule_service.get_all_rules(UUID(url_id))
                     
-                    _discovery_status[url_id]["message"] = "Crawling website..."
+                    crawl_state["message"] = "Crawling website..."
                     
-                    # Run discovery
+                    # Run discovery with shared crawl_state for dynamic control
                     pages = await discovery_service.discover_pages(
                         scrape_url_id=UUID(url_id),
                         base_url=scrape_url.url,
@@ -224,22 +245,21 @@ async def start_discovery(
                         respect_robots=request.respect_robots,
                         delay_seconds=request.delay_seconds,
                         path_rules=rules,
+                        crawl_state=crawl_state,
                     )
                     
-                    _discovery_status[url_id] = {
-                        "status": "completed",
-                        "pages": len(pages),
-                        "message": f"Discovered {len(pages)} pages",
-                    }
+                    # Update final status (only if not already cancelled)
+                    if crawl_state["status"] != "cancelled":
+                        crawl_state["status"] = "completed"
+                        crawl_state["pages_discovered"] = len(pages)
+                        crawl_state["message"] = f"Discovered {len(pages)} pages"
+                        crawl_state["queue_size"] = 0
                     
                     await discovery_service.close()
                     
                 except Exception as e:
-                    _discovery_status[url_id] = {
-                        "status": "error",
-                        "pages": 0,
-                        "message": str(e),
-                    }
+                    crawl_state["status"] = "error"
+                    crawl_state["message"] = str(e)
         
         background_tasks.add_task(run_discovery)
         
@@ -260,18 +280,132 @@ async def start_discovery(
 async def get_discovery_status(
     url_id: str = Path(..., description="URL ID"),
 ):
-    """Get the current discovery status for a URL."""
+    """Get the current discovery status for a URL including live progress."""
     status = _discovery_status.get(url_id, {
         "status": "idle",
-        "pages": 0,
+        "pages_discovered": 0,
         "message": "No discovery running",
     })
     
     return DiscoveryStatusResponse(
         url_id=url_id,
-        status=status["status"],
-        pages_discovered=status["pages"],
-        message=status["message"],
+        status=status.get("status", "idle"),
+        pages_discovered=status.get("pages_discovered", 0),
+        message=status.get("message", ""),
+        queue_size=status.get("queue_size", 0),
+        current_depth=status.get("current_depth", 0),
+        recent_urls=status.get("recent_urls", []),
+        rules_refreshed_count=status.get("rules_refreshed_count", 0),
+        urls_skipped_by_rules=status.get("urls_skipped_by_rules", 0),
+    )
+
+
+@router.post("/{url_id}/discover/pause", response_model=DiscoveryStatusResponse)
+async def pause_discovery(
+    url_id: str = Path(..., description="URL ID"),
+):
+    """
+    Pause an active discovery crawl.
+    
+    The crawl loop will pause at the next iteration and wait until
+    resumed or cancelled. Any pages already discovered are preserved.
+    """
+    if url_id not in _discovery_status:
+        raise HTTPException(status_code=404, detail="No discovery found for this URL")
+    
+    state = _discovery_status[url_id]
+    current_status = state.get("status", "idle")
+    
+    if current_status != "running":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot pause: discovery status is '{current_status}'",
+        )
+    
+    state["command"] = "pause"
+    
+    return DiscoveryStatusResponse(
+        url_id=url_id,
+        status=state.get("status", "running"),
+        pages_discovered=state.get("pages_discovered", 0),
+        message="Pause signal sent. Crawl will pause at next iteration.",
+        queue_size=state.get("queue_size", 0),
+        current_depth=state.get("current_depth", 0),
+        recent_urls=state.get("recent_urls", []),
+        rules_refreshed_count=state.get("rules_refreshed_count", 0),
+        urls_skipped_by_rules=state.get("urls_skipped_by_rules", 0),
+    )
+
+
+@router.post("/{url_id}/discover/resume", response_model=DiscoveryStatusResponse)
+async def resume_discovery(
+    url_id: str = Path(..., description="URL ID"),
+):
+    """
+    Resume a paused discovery crawl.
+    
+    The crawl loop will continue from where it left off.
+    """
+    if url_id not in _discovery_status:
+        raise HTTPException(status_code=404, detail="No discovery found for this URL")
+    
+    state = _discovery_status[url_id]
+    current_status = state.get("status", "idle")
+    
+    if current_status != "paused":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot resume: discovery status is '{current_status}'",
+        )
+    
+    state["command"] = "running"
+    
+    return DiscoveryStatusResponse(
+        url_id=url_id,
+        status=state.get("status", "paused"),
+        pages_discovered=state.get("pages_discovered", 0),
+        message="Resume signal sent. Crawl will continue shortly.",
+        queue_size=state.get("queue_size", 0),
+        current_depth=state.get("current_depth", 0),
+        recent_urls=state.get("recent_urls", []),
+        rules_refreshed_count=state.get("rules_refreshed_count", 0),
+        urls_skipped_by_rules=state.get("urls_skipped_by_rules", 0),
+    )
+
+
+@router.post("/{url_id}/discover/cancel", response_model=DiscoveryStatusResponse)
+async def cancel_discovery(
+    url_id: str = Path(..., description="URL ID"),
+):
+    """
+    Cancel an active or paused discovery crawl.
+    
+    The crawl loop will stop and commit all pages discovered so far.
+    """
+    if url_id not in _discovery_status:
+        raise HTTPException(status_code=404, detail="No discovery found for this URL")
+    
+    state = _discovery_status[url_id]
+    current_status = state.get("status", "idle")
+    
+    if current_status in ("completed", "cancelled", "error", "idle"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot cancel: discovery status is '{current_status}'",
+        )
+    
+    state["command"] = "cancel"
+    
+    return DiscoveryStatusResponse(
+        url_id=url_id,
+        status=state.get("status", current_status),
+        pages_discovered=state.get("pages_discovered", 0),
+        message="Cancel signal sent. Crawl will stop at next iteration.",
+        queue_size=state.get("queue_size", 0),
+        current_depth=state.get("current_depth", 0),
+        recent_urls=state.get("recent_urls", []),
+        rules_refreshed_count=state.get("rules_refreshed_count", 0),
+        urls_skipped_by_rules=state.get("urls_skipped_by_rules", 0),
     )
 
 

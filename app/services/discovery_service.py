@@ -52,6 +52,8 @@ class DiscoveryService:
         respect_robots: bool = True,
         delay_seconds: float = 1.0,
         path_rules: Optional[List[PathRule]] = None,
+        crawl_state: Optional[Dict] = None,
+        rule_refresh_interval: int = 10,
     ) -> List[DiscoveredPage]:
         """
         Crawl a website and discover pages without ingesting content.
@@ -63,7 +65,11 @@ class DiscoveryService:
             max_pages: Maximum number of pages to discover
             respect_robots: Whether to respect robots.txt
             delay_seconds: Delay between requests
-            path_rules: List of path rules to apply
+            path_rules: List of path rules to apply (initial set)
+            crawl_state: Shared dict for dynamic crawl control.
+                Supports "command" key ("running", "pause", "cancel")
+                and is updated with live progress.
+            rule_refresh_interval: Re-read path rules from DB every N URLs
             
         Returns:
             List of discovered pages
@@ -73,6 +79,7 @@ class DiscoveryService:
         queue: List[Tuple[str, int, Optional[UUID]]] = [(base_url, 0, None)]
         base_parsed = urlparse(base_url)
         base_domain = base_parsed.netloc
+        urls_processed = 0
 
         # Parse robots.txt if needed
         disallowed_paths: Set[str] = set()
@@ -82,6 +89,28 @@ class DiscoveryService:
         client = await self._get_client()
 
         while queue and len(discovered) < max_pages:
+            # --- Handle pause / cancel commands ---
+            if crawl_state:
+                command = crawl_state.get("command", "running")
+
+                if command == "pause":
+                    crawl_state["status"] = "paused"
+                    crawl_state["message"] = "Discovery paused"
+                    while crawl_state.get("command") == "pause":
+                        await asyncio.sleep(1.0)
+                    # After exiting pause, check if cancelled
+                    if crawl_state.get("command") == "cancel":
+                        crawl_state["status"] = "cancelled"
+                        crawl_state["message"] = "Discovery cancelled"
+                        break
+                    crawl_state["status"] = "running"
+                    crawl_state["message"] = "Discovery resumed"
+
+                if command == "cancel":
+                    crawl_state["status"] = "cancelled"
+                    crawl_state["message"] = "Discovery cancelled"
+                    break
+
             url, depth, parent_id = queue.pop(0)
             
             if url in visited:
@@ -100,6 +129,10 @@ class DiscoveryService:
                 
             # Check if blocked by path rules
             if path_rules and self._is_path_blocked(path, path_rules):
+                if crawl_state:
+                    crawl_state["urls_skipped_by_rules"] = (
+                        crawl_state.get("urls_skipped_by_rules", 0) + 1
+                    )
                 continue
             
             visited.add(url)
@@ -156,7 +189,48 @@ class DiscoveryService:
                 
                 self.db.add(page)
                 discovered.append(page)
-                
+                urls_processed += 1
+
+                # --- Update crawl state with live progress ---
+                if crawl_state:
+                    crawl_state["pages_discovered"] = len(discovered)
+                    crawl_state["queue_size"] = len(queue)
+                    crawl_state["current_depth"] = depth
+                    recent = crawl_state.get("recent_urls", [])
+                    recent.append({"url": url, "path": path, "depth": depth})
+                    crawl_state["recent_urls"] = recent[-20:]
+
+                # --- Periodic: commit pages and re-read path rules ---
+                if crawl_state and urls_processed % rule_refresh_interval == 0:
+                    await self.db.commit()
+
+                    result = await self.db.execute(
+                        select(PathRule)
+                        .where(PathRule.scrape_url_id == scrape_url_id)
+                        .order_by(PathRule.priority.desc())
+                    )
+                    path_rules = list(result.scalars().all())
+                    crawl_state["rules_refreshed_count"] = (
+                        crawl_state.get("rules_refreshed_count", 0) + 1
+                    )
+
+                    # Purge queued URLs that match new block rules
+                    if path_rules:
+                        original_size = len(queue)
+                        queue = [
+                            (u, d, p) for u, d, p in queue
+                            if not self._is_path_blocked(
+                                urlparse(u).path or "/", path_rules
+                            )
+                        ]
+                        purged = original_size - len(queue)
+                        if purged > 0:
+                            crawl_state["urls_skipped_by_rules"] = (
+                                crawl_state.get("urls_skipped_by_rules", 0)
+                                + purged
+                            )
+                            crawl_state["queue_size"] = len(queue)
+
                 # Delay between requests
                 await asyncio.sleep(delay_seconds)
                 

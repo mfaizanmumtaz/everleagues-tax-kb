@@ -8,7 +8,6 @@ from sqlalchemy import select, func, or_
 
 from ..db_models.scrape_url import (
     ScrapeUrl,
-    ApiCredential,
     DataSourceType,
     ScheduleFrequency,
     UrlStatus,
@@ -25,13 +24,11 @@ class UrlDbService:
     async def create_url(
         self,
         url: str,
-        jurisdiction: str = "federal",  # Now accepts jurisdiction directly
+        jurisdiction: str = "federal",
         state: Optional[str] = None,
         city: Optional[str] = None,
         data_source: DataSourceType = DataSourceType.SCRAPE,
         schedule_frequency: ScheduleFrequency = ScheduleFrequency.ON_DEMAND,
-        api_endpoint: Optional[str] = None,
-        api_key: Optional[str] = None,
         name: Optional[str] = None,
         description: Optional[str] = None,
         delay_between_requests: int = 2,
@@ -46,10 +43,8 @@ class UrlDbService:
             jurisdiction: federal, state, or local (required)
             state: State code (required for state/local)
             city: City name (required for local)
-            data_source: scrape, api, or file
+            data_source: scrape or file
             schedule_frequency: How often to scrape
-            api_endpoint: API endpoint (if data_source is api)
-            api_key: API key (if data_source is api)
             name: Optional display name
             description: Optional description
             delay_between_requests: Seconds between requests
@@ -59,13 +54,11 @@ class UrlDbService:
         Returns:
             Created ScrapeUrl object
         """
-        # Jurisdiction is now provided directly (no derivation needed)
-        # Create URL entry
         scrape_url = ScrapeUrl(
             url=url,
             name=name,
             description=description,
-            category=None,  # Deprecated, use jurisdiction
+            category=None,
             state=state,
             city=city,
             jurisdiction=jurisdiction.lower(),
@@ -79,19 +72,6 @@ class UrlDbService:
         )
 
         self.db.add(scrape_url)
-        await self.db.flush()  # Get the ID
-
-        # Create API credential if needed
-        if data_source == DataSourceType.API and api_endpoint:
-            credential = ApiCredential(
-                scrape_url_id=scrape_url.id,
-                api_endpoint=api_endpoint,
-                api_key_encrypted=api_key.encode()
-                if api_key
-                else None,  # In production, encrypt this
-            )
-            self.db.add(credential)
-
         await self.db.commit()
         await self.db.refresh(scrape_url)
 
@@ -298,12 +278,6 @@ class UrlDbService:
 
         result = await self.db.execute(stmt)
         return result.scalars().all()
-
-    async def get_api_credential(self, url_id: UUID) -> Optional[ApiCredential]:
-        """Get API credential for a URL."""
-        stmt = select(ApiCredential).where(ApiCredential.scrape_url_id == url_id)
-        result = await self.db.execute(stmt)
-        return result.scalar_one_or_none()
 
     def to_dict(self, scrape_url: ScrapeUrl) -> dict:
         """Convert ScrapeUrl to dictionary for API response."""
