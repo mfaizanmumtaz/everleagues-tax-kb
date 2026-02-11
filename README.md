@@ -1,3 +1,4 @@
+# Warning (Update is Pending)
 # EverLeagues Tax RAG System - Backend API
 
 A **Retrieval-Augmented Generation (RAG)** knowledge base system for tax documents. This backend ingests, classifies, indexes, and searches tax documents from multiple sources (file uploads, web scraping, and external API feeds). It uses hybrid search combining BM25 lexical matching, vector semantic search, and authority-level weighting to deliver accurate, citation-backed answers to tax-related questions.

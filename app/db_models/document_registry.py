@@ -28,6 +28,7 @@ class SourceType(str, enum.Enum):
 class ProcessingStatus(str, enum.Enum):
     """Document processing status."""
     PENDING = "pending"
+    QUEUED = "queued"
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"

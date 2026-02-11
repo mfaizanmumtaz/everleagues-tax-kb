@@ -5,6 +5,7 @@ from typing import Optional, List
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from ..db_models.document_registry import (
     DocumentRegistry,
@@ -131,8 +132,10 @@ class DocumentRegistryService:
 
     async def get_by_external_file_id(self, external_file_id: str) -> Optional[DocumentRegistry]:
         """Find registry by external file ID (for API-pushed documents)."""
-        stmt = select(DocumentRegistry).where(
-            DocumentRegistry.external_file_id == external_file_id
+        stmt = (
+            select(DocumentRegistry)
+            .options(selectinload(DocumentRegistry.blobs))
+            .where(DocumentRegistry.external_file_id == external_file_id)
         )
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
@@ -193,6 +196,16 @@ class DocumentRegistryService:
 
     async def get_by_id(self, registry_id: UUID) -> Optional[DocumentRegistry]:
         stmt = select(DocumentRegistry).where(DocumentRegistry.id == registry_id)
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_with_blob(self, registry_id: UUID) -> Optional[DocumentRegistry]:
+        """Get registry entry with eagerly loaded blob records."""
+        stmt = (
+            select(DocumentRegistry)
+            .where(DocumentRegistry.id == registry_id)
+            .options(selectinload(DocumentRegistry.blobs))
+        )
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 

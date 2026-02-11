@@ -13,15 +13,12 @@ import httpx
 from ..config import settings
 from ..database.connection import AsyncSessionLocal
 from ..db_models.scrape_job import LogLevel
-from ..models.document import DocumentCreate
 from ..services.scrape_job_service import ScrapeJobService
 from ..services.discovered_page_service import DiscoveredPageService
 from ..services.url_db_service import UrlDbService
 from ..services.document_registry_service import DocumentRegistryService
 from ..services.blob_storage_service import get_blob_storage_service
-from ..services.file_parser import get_file_parser_service
-from ..services.document_service import get_document_service
-from ..services.document_classifier_service import get_document_classifier_service
+from ..services.ingestion_service import process_from_content
 from ..services.audit_log_service import AuditLogService
 from ..db_models.document_registry import ProcessingStatus
 from ..db_models.scrape_url import UrlStatus
@@ -211,6 +208,10 @@ async def _process_single_page(
     """
     Process a single discovered page through the full ingestion pipeline.
 
+    Steps 1-4 (download, filename, blob upload, registry creation) happen here.
+    Steps 5-9 (extract, classify, Solr, chunk, status update) are delegated to
+    the shared ingestion_service.process_from_content().
+
     Returns:
         Tuple of (success: bool, chunks_created: int)
     """
@@ -289,112 +290,34 @@ async def _process_single_page(
             )
             return False, 0
 
-        # Step 5: Extract text
-        parse_result = None
-        extraction_error = None
-        try:
-            parser_service = get_file_parser_service()
-            parse_result = await asyncio.to_thread(
-                parser_service.extract_text,
-                file_data=content,
-                filename=filename,
-                mime_type=content_type,
-            )
-        except Exception as e:
-            extraction_error = str(e)
+        # Steps 5-9: Extract, classify, create Solr doc, chunk, update status
+        # Delegated to the shared ingestion pipeline.
+        scrape_metadata = {
+            "title": page.title,
+            "source_url": page.url,
+            "source_domain": urlparse(page.url).netloc if page.url else None,
+            "jurisdiction": jurisdiction,
+            "state": scrape_url.state,
+            "city": scrape_url.city,
+        }
 
-        # Step 6: Classify document
-        classification = None
-        if parse_result and parse_result.success and parse_result.text:
-            try:
-                classifier = get_document_classifier_service(use_ai=True)
-                classification = classifier.classify(
-                    text=parse_result.text,
-                    source_url=page.url,
-                    filename=filename,
-                    existing_metadata={
-                        "title": page.title,
-                        "jurisdiction": jurisdiction,
-                        "state": scrape_url.state,
-                    },
-                )
-            except Exception:
-                classification = None
-
-        # Step 7: Create Solr document
-        doc_service = get_document_service()
-        doc_create = DocumentCreate(
-            name=filename,
-            title=(classification.title if classification else None) or page.title or filename,
-            description=(classification.description if classification else None),
-            source_url=page.url,
-            source_domain=urlparse(page.url).netloc if page.url else None,
-            tags=(classification.tags if classification else []),
-            category=None,
-            doc_type=(classification.doc_type if classification else None),
-            tax_year=(classification.tax_year if classification else None),
-            jurisdiction=jurisdiction,
-            state=scrape_url.state,
-            city=scrape_url.city,
-            authority_level=(classification.authority_level if classification else None),
-            authority_level_rationale=(
-                classification.authority_level_rationale if classification else None
-            ),
-            size=str(len(content)),
+        success, chunks_created = await process_from_content(
+            registry_id=str(registry.id),
+            file_content=content,
+            filename=filename,
+            content_type=content_type,
+            metadata=scrape_metadata,
+            source="scrape",
         )
-
-        try:
-            document = await doc_service.create_document(doc_create)
-        except Exception as e:
-            await registry_service.update_processing_status(
-                registry.id,
-                ProcessingStatus.FAILED,
-                error=f"Failed to create Solr document: {str(e)}",
-            )
-            await job_service.add_log(
-                job_id, LogLevel.ERROR, f"Solr document creation failed for {page.url}: {str(e)}"
-            )
-            return False, 0
-
-        # Link registry to Solr document
-        await registry_service.update_solr_reference(registry.id, document.id)
-
-        # Step 8: Chunk + embed + index
-        chunks_created = 0
-        if parse_result and parse_result.success and parse_result.text:
-            try:
-                chunks_created, errors = await doc_service.process_and_chunk_document(
-                    doc_id=document.id,
-                    text=parse_result.text,
-                    generate_embeddings=True,
-                )
-                if chunks_created > 0:
-                    await registry_service.update_chunk_count(registry.id, chunks_created)
-            except Exception as e:
-                await job_service.add_log(
-                    job_id,
-                    LogLevel.WARNING,
-                    f"Chunking failed for {page.url}: {str(e)}",
-                )
-
-        # Update registry status
-        if chunks_created > 0:
-            await registry_service.update_processing_status(
-                registry.id, ProcessingStatus.COMPLETED
-            )
-        else:
-            error_msg = extraction_error or "No text extracted or no chunks created"
-            await registry_service.update_processing_status(
-                registry.id, ProcessingStatus.FAILED, error=error_msg
-            )
 
         await job_service.add_log(
             job_id,
-            LogLevel.INFO,
-            f"Processed: {page.url} -> {chunks_created} chunks",
+            LogLevel.INFO if success else LogLevel.WARNING,
+            f"Processed: {page.url} -> {chunks_created} chunks"
+            + ("" if success else " (failed)"),
         )
 
-        return chunks_created > 0, chunks_created
+        return success, chunks_created
 
     except Exception as e:
         await job_service.add_log(

@@ -81,12 +81,13 @@ async def get_governance_logs(
             filters.append(f'governanceState:"{to_state.value}"')
 
         # Get documents that have governance history
-        docs, total = solr.search_documents(
+        # Note: do NOT sort by updatedAt here -- the field lacks docValues in Solr.
+        # We sort the extracted log entries in Python below instead.
+        docs, total = await solr.search_documents(
             query="governanceHistory:*",
             filters=filters if filters else None,
             start=(page - 1) * limit,
             rows=limit,
-            sort="updatedAt desc",
         )
 
         # Extract governance log entries from documents

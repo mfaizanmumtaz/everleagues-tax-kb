@@ -111,6 +111,15 @@ class Settings(BaseSettings):
     ]
     process_uploads_sync: bool = True  # Process immediately vs background
 
+    # ===========================================
+    # Celery / Queue Configuration
+    # ===========================================
+    celery_broker_url: str = "redis://localhost:6379/0"
+    celery_result_backend: str = "redis://localhost:6379/1"
+    worker_concurrency: int = 4
+    worker_max_retries: int = 3
+    worker_retry_delay: int = 60
+
     @property
     def max_upload_size_bytes(self) -> int:
         """Get maximum upload size in bytes."""

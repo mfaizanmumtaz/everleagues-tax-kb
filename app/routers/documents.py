@@ -13,6 +13,7 @@ from ..models.document import (
 from ..models.common import FilterParams, GovernanceState
 from ..services.document_service import get_document_service
 from ..services.document_registry_service import DocumentRegistryService
+from ..services.audit_log_service import AuditLogService
 from ..database.connection import get_db
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
@@ -133,6 +134,7 @@ async def create_document(document: DocumentCreate):
 async def update_document(
     document_id: str = Path(..., description="Document ID"),
     updates: DocumentUpdate = ...,
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Update a document.
@@ -141,10 +143,38 @@ async def update_document(
     """
     try:
         service = get_document_service()
+
+        # Get current document for audit log (old values)
+        existing = await service.get_document(document_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        # Capture old values for changed fields
+        update_data = updates.model_dump(exclude_unset=True)
+        old_values = {}
+        for field_name in update_data:
+            old_val = getattr(existing, field_name, None)
+            if old_val is not None:
+                old_values[field_name] = str(old_val) if not isinstance(old_val, (str, int, float, bool, list)) else old_val
+            else:
+                old_values[field_name] = None
+
         doc = await service.update_document(document_id, updates)
 
         if not doc:
             raise HTTPException(status_code=404, detail="Document not found")
+
+        # Audit log: document metadata updated
+        try:
+            audit_service = AuditLogService(db)
+            await audit_service.log_document_update(
+                document_id=document_id,
+                document_name=existing.name,
+                old_values=old_values,
+                new_values=update_data,
+            )
+        except Exception:
+            pass  # Don't fail the request if audit logging fails
 
         return doc
     except HTTPException:
@@ -168,10 +198,23 @@ async def delete_document(
         if not doc:
             raise HTTPException(status_code=404, detail="Document not found")
 
+        # Capture name before deletion for audit log
+        doc_name = doc.name
+
         await service.delete_document(document_id)
 
         registry_service = DocumentRegistryService(db)
         await registry_service.delete_by_solr_id(document_id)
+
+        # Audit log: document deleted
+        try:
+            audit_service = AuditLogService(db)
+            await audit_service.log_document_delete(
+                document_id=document_id,
+                document_name=doc_name,
+            )
+        except Exception:
+            pass  # Don't fail the request if audit logging fails
     except HTTPException:
         raise
     except Exception as e:

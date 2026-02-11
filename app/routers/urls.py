@@ -331,9 +331,23 @@ async def update_url(
     try:
         url_service = UrlDbService(db)
 
+        # Get existing URL for audit log (old values)
+        existing = await url_service.get_url(UUID(url_id))
+        if not existing:
+            raise HTTPException(status_code=404, detail="URL not found")
+
+        # Capture old values for audit log
+        update_data = updates.model_dump(exclude_unset=True)
+        old_values = {}
+        for key in update_data:
+            old_val = getattr(existing, key, None)
+            if old_val is not None:
+                old_values[key] = old_val.value if hasattr(old_val, "value") else old_val
+            else:
+                old_values[key] = None
+
         # Build update kwargs
         update_kwargs = {}
-        update_data = updates.model_dump(exclude_unset=True)
 
         for key, value in update_data.items():
             if value is not None:
@@ -350,6 +364,21 @@ async def update_url(
 
         if not scrape_url:
             raise HTTPException(status_code=404, detail="URL not found")
+
+        # Audit log: URL updated
+        try:
+            audit_service = AuditLogService(db)
+            await audit_service.log_action(
+                action="url.update",
+                resource_type="url",
+                resource_id=url_id,
+                resource_name=existing.url,
+                old_values=old_values,
+                new_values=update_data,
+                details=f"URL configuration updated: {', '.join(update_data.keys())}",
+            )
+        except Exception:
+            pass  # Don't fail the request if audit logging fails
 
         return URLResponse(**url_service.to_dict(scrape_url))
     except HTTPException:

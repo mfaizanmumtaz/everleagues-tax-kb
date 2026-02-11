@@ -70,12 +70,14 @@ LOADER_MAPPING: Dict[str, LoaderConfig] = {
         loader_name="BSHTMLLoader",
         package="langchain_community.document_loaders",
         requires_file_path=True,
+        loader_kwargs={"open_encoding": "utf-8"},
         install_hint="pip install beautifulsoup4 lxml",
     ),
     ".htm": LoaderConfig(
         loader_name="BSHTMLLoader",
         package="langchain_community.document_loaders",
         requires_file_path=True,
+        loader_kwargs={"open_encoding": "utf-8"},
         install_hint="pip install beautifulsoup4 lxml",
     ),
 }

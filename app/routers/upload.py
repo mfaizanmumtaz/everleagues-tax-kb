@@ -1,10 +1,9 @@
 """File Upload API routes - using unified DocumentRegistry."""
 
-import asyncio
 import json
+import logging
 import os
 from typing import Optional
-from datetime import datetime
 from uuid import uuid4, UUID
 from fastapi import (
     APIRouter,
@@ -13,24 +12,20 @@ from fastapi import (
     UploadFile,
     Form,
     Depends,
-    BackgroundTasks,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
 from ..models.upload import FileUploadMetadata, FileUploadResponse
-from ..models.document import DocumentCreate
 from ..database.connection import get_db
 from ..services.blob_storage_service import get_blob_storage_service
-from ..services.file_parser import get_file_parser_service
-from ..services.document_service import get_document_service
-from ..services.document_classifier_service import get_document_classifier_service
-from ..services.audit_log_service import AuditLogService
 from ..services.document_registry_service import DocumentRegistryService
 from ..db_models.document_registry import ProcessingStatus
-from ..database.connection import AsyncSessionLocal
+from ..worker.tasks import process_document
 
 router = APIRouter(prefix="/upload", tags=["File Upload"])
+
+logger = logging.getLogger(__name__)
 
 
 def _validate_file_size(file_size: int) -> None:
@@ -71,9 +66,8 @@ async def upload_file(
     file: UploadFile = File(..., description="File to upload"),
     metadata: str = Form(None, description="JSON string with document metadata"),
     db: AsyncSession = Depends(get_db),
-    background_tasks: BackgroundTasks = None,
 ):
-    """Upload a file and process it through the ingestion pipeline."""
+    """Upload a file and queue it for processing through the ingestion pipeline."""
     try:
         if not file.filename:
             raise HTTPException(status_code=400, detail="Filename is required")
@@ -101,7 +95,7 @@ async def upload_file(
         stored_filename = f"{uuid4()}{file_ext}"
 
         try:
-            blob_path, blob_url, checksum, stored_size = blob_service.upload_file( 
+            blob_path, blob_url, checksum, stored_size = blob_service.upload_file(
                 container=settings.azure_container_uploads,
                 file_data=file_content,
                 filename=stored_filename,
@@ -146,9 +140,9 @@ async def upload_file(
                 content_hash=checksum,
             )
 
-            # Update status to PROCESSING
+            # Set status to QUEUED (Celery worker will set it to PROCESSING)
             await registry_service.update_processing_status(
-                registry.id, ProcessingStatus.PROCESSING
+                registry.id, ProcessingStatus.QUEUED
             )
 
             registry_id = str(registry.id)
@@ -158,47 +152,30 @@ async def upload_file(
                 detail=f"Failed to create registry record: {str(e)}",
             )
 
+        # Queue the processing task via Celery
+        process_document.delay(
+            registry_id=registry_id,
+            metadata=upload_metadata.model_dump(),
+            source="upload",
+        )
+
         response = FileUploadResponse(
             document_id="pending",
-            uploaded_file_id=None,  # Deprecated
+            uploaded_file_id=None,
             registry_id=registry_id,
             filename=file.filename,
             file_size=file_size,
             blob_path=blob_path,
             blob_url=blob_url,
             content_type=file.content_type or "application/octet-stream",
-            status="processing",
+            status="queued",
             chunks_created=0,
             word_count=0,
             page_count=0,
             parsing_quality=0.0,
-            message="File uploaded successfully. Processing in background...",
+            message="File uploaded successfully. Queued for processing.",
             document=None,
         )
-
-        if background_tasks:
-            background_tasks.add_task(
-                _process_uploaded_file,
-                registry_id=registry_id,
-                file_content=file_content,
-                original_filename=file.filename,
-                content_type=file.content_type,
-                file_size=file_size,
-                blob_path=blob_path,
-                blob_url=blob_url,
-                upload_metadata=upload_metadata,
-            )
-        else:
-            await _process_uploaded_file(
-                registry_id=registry_id,
-                file_content=file_content,
-                original_filename=file.filename,
-                content_type=file.content_type,
-                file_size=file_size,
-                blob_path=blob_path,
-                blob_url=blob_url,
-                upload_metadata=upload_metadata,
-            )
 
         return response
 
@@ -208,179 +185,3 @@ async def upload_file(
         raise HTTPException(
             status_code=500, detail=f"Unexpected error during file upload: {str(e)}"
         )
-
-
-async def _process_uploaded_file(
-    registry_id: str,
-    file_content: bytes,
-    original_filename: str,
-    content_type: str,
-    file_size: int,
-    blob_path: str,
-    blob_url: str,
-    upload_metadata: FileUploadMetadata,
-):
-    """Background task to process an uploaded file."""
-    
-
-    async with AsyncSessionLocal() as db:
-        registry_service = DocumentRegistryService(db)
-        extraction_error = None
-
-        try:
-            parser_service = get_file_parser_service()
-
-            try:
-                parse_result = await asyncio.to_thread(
-                    parser_service.extract_text,
-                    file_data=file_content,
-                    filename=original_filename,
-                    mime_type=content_type,
-                )
-            except Exception as e:
-                parse_result = None
-                extraction_error = str(e)
-
-            classification = None
-            if parse_result and parse_result.success and parse_result.text:
-                try:
-                    classifier = get_document_classifier_service(use_ai=True)
-                    classification = classifier.classify(
-                        text=parse_result.text,
-                        source_url=blob_url,
-                        filename=original_filename,
-                        existing_metadata={
-                            "title": upload_metadata.title,
-                            "description": upload_metadata.description,
-                            "doc_type": upload_metadata.doc_type,
-                            "authority_level": upload_metadata.authority_level,
-                            "tags": upload_metadata.tags if upload_metadata.tags else None,
-                            "tax_year": upload_metadata.tax_year,
-                            "form_family": upload_metadata.form_family,
-                        },
-                    )
-                except Exception:
-                    classification = None
-
-            doc_service = get_document_service()
-
-            doc_create = DocumentCreate(
-                name=original_filename,
-                title=upload_metadata.title
-                or (classification.title if classification else None)
-                or original_filename,
-                description=upload_metadata.description
-                or (classification.description if classification else None),
-                source_url=blob_url,
-                source_domain=None,
-                tags=upload_metadata.tags
-                if upload_metadata.tags
-                else (classification.tags if classification else []),
-                category=None,
-                doc_type=upload_metadata.doc_type
-                or (classification.doc_type if classification else None),
-                tax_year=upload_metadata.tax_year
-                or (classification.tax_year if classification else None),
-                tax_type=upload_metadata.tax_type,
-                jurisdiction=upload_metadata.jurisdiction,
-                state=upload_metadata.state,
-                city=upload_metadata.city,
-                authority_level=upload_metadata.authority_level
-                or (classification.authority_level if classification else None),
-                authority_level_rationale=upload_metadata.authority_level_rationale
-                or (classification.authority_level_rationale if classification else None),
-                size=str(file_size),
-                knowledge_base_id=upload_metadata.knowledge_base_id,
-                form_family=upload_metadata.form_family
-                or (classification.form_family if classification else None),
-                effective_from=datetime.fromisoformat(
-                    upload_metadata.effective_from.replace("Z", "+00:00")
-                )
-                if upload_metadata.effective_from
-                else None,
-                effective_to=datetime.fromisoformat(
-                    upload_metadata.effective_to.replace("Z", "+00:00")
-                )
-                if upload_metadata.effective_to
-                else None,
-                applies_to_tax_years=upload_metadata.applies_to_tax_years,
-                applies_to_jurisdictions=upload_metadata.applies_to_jurisdictions,
-            )
-
-            try:
-                document = await doc_service.create_document(doc_create)
-            except Exception as e:
-                await registry_service.update_processing_status(
-                    UUID(registry_id),
-                    ProcessingStatus.FAILED,
-                    error=f"Failed to create Solr document: {str(e)}",
-                )
-                return
-
-            # Link registry to Solr document
-            await registry_service.update_solr_reference(UUID(registry_id), document.id)
-
-            chunks_created = 0
-            processing_errors = []
-
-            if parse_result and parse_result.success and parse_result.text:
-                try:
-                    chunks_created, errors = await doc_service.process_and_chunk_document(
-                        doc_id=document.id,
-                        text=parse_result.text,
-                        generate_embeddings=True,
-                    )
-                    if errors:
-                        processing_errors.extend(errors)
-
-                    if chunks_created > 0:
-                        await registry_service.update_chunk_count(
-                            UUID(registry_id), chunks_created
-                        )
-                except Exception as e:
-                    processing_errors.append(str(e))
-            elif parse_result and not parse_result.success:
-                processing_errors.extend(parse_result.errors)
-            elif not parse_result and extraction_error:
-                processing_errors.append(extraction_error)
-
-            if chunks_created > 0:
-                await registry_service.update_processing_status(
-                    UUID(registry_id), ProcessingStatus.COMPLETED
-                )
-            else:
-                await registry_service.update_processing_status(
-                    UUID(registry_id),
-                    ProcessingStatus.FAILED,
-                    error="; ".join(processing_errors[:3]) if processing_errors else "No chunks created",
-                )
-
-            try:
-                audit_service = AuditLogService(db)
-                await audit_service.log_action(
-                    action="document.upload",
-                    resource_type="document",
-                    resource_id=document.id,
-                    resource_name=original_filename,
-                    actor="api",
-                    new_values={
-                        "filename": original_filename,
-                        "file_size": file_size,
-                        "blob_path": blob_path,
-                        "chunks_created": chunks_created,
-                        "registry_id": registry_id,
-                    },
-                    details=f"File processed in background. Chunks: {chunks_created}",
-                )
-            except Exception:
-                pass
-
-        except Exception as e:
-            try:
-                await registry_service.update_processing_status(
-                    UUID(registry_id),
-                    ProcessingStatus.FAILED,
-                    error=f"Background processing failed: {str(e)}",
-                )
-            except Exception:
-                pass

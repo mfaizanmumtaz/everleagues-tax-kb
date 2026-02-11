@@ -1,5 +1,5 @@
 """Initialize database tables using SQLAlchemy create_all()."""
-    
+
 from app.database.connection import init_db
 
 try:

@@ -351,13 +351,15 @@ async def get_freshness_metrics(db: AsyncSession = Depends(get_db)):
 
         try:
             # Get top 10 stalest documents
+            # Note: updatedAt lacks docValues in Solr, so we sort in Python instead
             stale_results, _ = await solr.search_documents(
                 query="*:*",
                 filters=["updatedAt:[* TO NOW-30DAY]"],
                 fields=["id", "name", "updatedAt", "sourceUrl"],
-                sort="updatedAt asc",
-                rows=10,
+                rows=50,
             )
+            # Sort by updatedAt ascending (stalest first) in Python
+            stale_results.sort(key=lambda d: d.get("updatedAt", ""), reverse=False)
             for doc in stale_results:
                 updated_str = doc.get("updatedAt", "")
                 days_stale = 0
