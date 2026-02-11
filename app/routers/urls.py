@@ -1,20 +1,21 @@
 """URL Management API routes with PostgreSQL persistence."""
 
-import asyncio
-from fastapi import APIRouter, HTTPException, Query, Path, BackgroundTasks, Depends
-from typing import Optional, List, Dict
-from datetime import datetime
+from fastapi import APIRouter, HTTPException, Query, Path, Depends
+from typing import Optional, List
+from datetime import datetime, timezone
 from uuid import UUID
 from pydantic import BaseModel, Field
 from enum import Enum
 from sqlalchemy.ext.asyncio import AsyncSession
+import redis as redis_lib
 
+from ..config import settings
 from ..database.connection import get_db
 from ..services.url_db_service import UrlDbService
 from ..services.audit_log_service import AuditLogService
 from ..services.scrape_job_service import ScrapeJobService
 from ..db_models.scrape_job import JobStatus
-from ..services.scrape_service import run_scrape
+from ..worker.tasks import process_scrape
 from ..db_models.scrape_url import (
     DataSourceType as DbDataSourceType,
     ScheduleFrequency as DbScheduleFrequency,
@@ -192,8 +193,18 @@ def _map_url_status(api_value: URLStatus) -> DbUrlStatus:
     return mapping.get(api_value, DbUrlStatus.ACTIVE)
 
 
-# Active scrape cancellation events keyed by url_id
-_active_scrapes: Dict[str, asyncio.Event] = {}
+# Redis client for scrape cancellation
+_redis_client: Optional[redis_lib.Redis] = None
+
+
+def _get_redis() -> redis_lib.Redis:
+    """Get or create a Redis client for cancellation signals."""
+    global _redis_client
+    if _redis_client is None:
+        _redis_client = redis_lib.Redis.from_url(
+            settings.celery_broker_url, decode_responses=True
+        )
+    return _redis_client
 
 
 # ==================== API Endpoints ====================
@@ -421,7 +432,6 @@ async def delete_url(
 
 @router.post("/{url_id}/scrape", response_model=ScrapeProgress)
 async def trigger_scrape(
-    background_tasks: BackgroundTasks,
     url_id: str = Path(..., description="URL ID"),
     db: AsyncSession = Depends(get_db),
 ):
@@ -430,6 +440,7 @@ async def trigger_scrape(
 
     Downloads all approved discovered pages and processes them through
     the full ingestion pipeline (blob, parse, classify, chunk, embed, Solr).
+    The scrape is executed asynchronously via a Celery worker task.
     """
     try:
         url_service = UrlDbService(db)
@@ -460,17 +471,8 @@ async def trigger_scrape(
         # Create a new scrape job
         job = await job_service.create_job(UUID(url_id), triggered_by="manual")
 
-        # Set up cancellation event
-        cancel_event = asyncio.Event()
-        _active_scrapes[url_id] = cancel_event
-
-        # Launch the real scraping as a background task
-        background_tasks.add_task(
-            run_scrape,
-            scrape_url_id=url_id,
-            job_id=str(job.id),
-            cancellation_event=cancel_event,
-        )
+        # Queue the scrape task via Celery
+        process_scrape.delay(scrape_url_id=url_id, job_id=str(job.id))
 
         return ScrapeProgress(
             url_id=url_id,
@@ -514,17 +516,19 @@ async def get_scrape_progress(
 
         job = jobs[0]
 
-        # Detect stale running jobs (background task crashed but never updated status)
+        # Detect stale running jobs (Celery task crashed but never updated status)
         job_status = job.status.value if job.status else "idle"
-        if job_status == "running" and url_id not in _active_scrapes:
-            # No active background task for this job -- it crashed
-            job_status = "failed"
-            job.status = JobStatus.FAILED
-            job.progress_message = "Job stopped unexpectedly"
-            try:
-                await db.commit()
-            except Exception:
-                pass
+        if job_status == "running" and job.started_at:
+            elapsed = (datetime.now(timezone.utc) - job.started_at).total_seconds()
+            if elapsed > settings.scrape_task_time_limit:
+                # Job has been running longer than the hard time limit -- it's stale
+                job_status = "failed"
+                job.status = JobStatus.FAILED
+                job.progress_message = "Job stopped unexpectedly"
+                try:
+                    await db.commit()
+                except Exception:
+                    pass
 
         return ScrapeProgress(
             url_id=url_id,
@@ -550,20 +554,20 @@ async def cancel_scrape(
 ):
     """
     Cancel an active scrape for a URL.
+
+    Sets a Redis cancellation key that the Celery worker checks on each
+    loop iteration, then marks the job as cancelled in the database.
     """
     try:
-        cancel_event = _active_scrapes.get(url_id)
-        if cancel_event:
-            cancel_event.set()
-            _active_scrapes.pop(url_id, None)
-            return {"message": "Cancellation signal sent", "url_id": url_id}
-
-        # No active scrape found, try to cancel the latest running job
         job_service = ScrapeJobService(db)
         jobs, _ = await job_service.get_jobs_for_url(UUID(url_id), page=1, limit=1)
+
         if jobs and jobs[0].status.value == "running":
+            # Signal cancellation via Redis so the Celery worker stops
+            redis_client = _get_redis()
+            redis_client.setex(f"scrape:cancel:{url_id}", 3600, "1")
             await job_service.cancel_job(jobs[0].id)
-            return {"message": "Job cancelled", "url_id": url_id}
+            return {"message": "Cancellation signal sent", "url_id": url_id}
 
         return {"message": "No active scrape to cancel", "url_id": url_id}
     except Exception as e:

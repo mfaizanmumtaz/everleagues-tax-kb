@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 from urllib.parse import urlparse
 
 import httpx
+import redis as redis_lib
 
 from ..config import settings
 from ..database.connection import AsyncSessionLocal
@@ -24,6 +25,18 @@ from ..db_models.document_registry import ProcessingStatus
 from ..db_models.scrape_url import UrlStatus
 
 logger = logging.getLogger(__name__)
+
+_redis_client: Optional[redis_lib.Redis] = None
+
+
+def _get_redis() -> redis_lib.Redis:
+    """Get or create a Redis client for cancellation checks."""
+    global _redis_client
+    if _redis_client is None:
+        _redis_client = redis_lib.Redis.from_url(
+            settings.celery_broker_url, decode_responses=True
+        )
+    return _redis_client
 
 # File extensions considered as downloadable documents
 DOCUMENT_EXTENSIONS = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".txt", ".csv", ".rtf"}
@@ -43,10 +56,10 @@ CONTENT_TYPE_EXTENSIONS = {
 async def run_scrape(
     scrape_url_id: str,
     job_id: str,
-    cancellation_event: asyncio.Event,
+    cancel_key: str,
 ) -> None:
     """
-    Main scrape execution function. Runs as a background task with its own DB session.
+    Main scrape execution function. Runs as a Celery task with its own DB session.
 
     Downloads all approved pages for the given URL, processes each through the
     full ingestion pipeline (blob storage, parse, classify, chunk, embed, Solr index).
@@ -54,10 +67,14 @@ async def run_scrape(
     Args:
         scrape_url_id: UUID of the ScrapeUrl to scrape
         job_id: UUID of the ScrapeJob tracking this run
-        cancellation_event: Event that signals cancellation when set
+        cancel_key: Redis key to check for cancellation signal
     """
     url_uuid = UUID(scrape_url_id)
     job_uuid = UUID(job_id)
+    redis_client = _get_redis()
+
+    # Clear any stale cancel key from a previous run
+    redis_client.delete(cancel_key)
 
     async with AsyncSessionLocal() as db:
         job_service = ScrapeJobService(db)
@@ -105,8 +122,9 @@ async def run_scrape(
 
             # Process each approved page
             for idx, page in enumerate(approved_pages):
-                # Check cancellation
-                if cancellation_event.is_set():
+                # Check cancellation via Redis key
+                if redis_client.exists(cancel_key):
+                    redis_client.delete(cancel_key)
                     await job_service.add_log(
                         job_uuid, LogLevel.INFO, "Scrape cancelled by user"
                     )

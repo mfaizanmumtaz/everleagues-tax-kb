@@ -134,3 +134,107 @@ async def _mark_failed(registry_id: str, error: str) -> None:
             ProcessingStatus.FAILED,
             error=f"Processing failed after retries: {error}",
         )
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=0,
+    acks_late=True,
+    soft_time_limit=settings.scrape_task_soft_time_limit,
+    time_limit=settings.scrape_task_time_limit,
+)
+def process_scrape(self, scrape_url_id: str, job_id: str):
+    """Celery task that scrapes all approved pages for a URL.
+
+    Downloads each approved discovered page and processes it through the
+    full ingestion pipeline (blob storage, parse, classify, chunk, embed,
+    Solr index).  Individual page failures are handled inside the scrape
+    loop -- no batch-level retries.
+
+    Args:
+        scrape_url_id: UUID string of the ScrapeUrl entry.
+        job_id: UUID string of the ScrapeJob tracking this run.
+    """
+    cancel_key = f"scrape:cancel:{scrape_url_id}"
+
+    logger.info(
+        f"Celery scrape task started: scrape_url_id={scrape_url_id}, "
+        f"job_id={job_id}"
+    )
+
+    loop = _get_loop()
+
+    try:
+        from ..services.scrape_service import run_scrape
+
+        loop.run_until_complete(
+            run_scrape(
+                scrape_url_id=scrape_url_id,
+                job_id=job_id,
+                cancel_key=cancel_key,
+            )
+        )
+
+        logger.info(
+            f"Celery scrape task completed: scrape_url_id={scrape_url_id}"
+        )
+        return {
+            "scrape_url_id": scrape_url_id,
+            "job_id": job_id,
+            "success": True,
+        }
+
+    except SoftTimeLimitExceeded:
+        logger.error(
+            f"Celery scrape task timed out: scrape_url_id={scrape_url_id}"
+        )
+        try:
+            loop.run_until_complete(
+                _mark_scrape_failed(
+                    scrape_url_id, job_id, "Task timed out (soft time limit exceeded)"
+                )
+            )
+        except Exception:
+            pass
+        return {
+            "scrape_url_id": scrape_url_id,
+            "job_id": job_id,
+            "success": False,
+            "error": "Task timed out",
+        }
+
+    except Exception as exc:
+        logger.exception(
+            f"Celery scrape task error: scrape_url_id={scrape_url_id}, error={exc}"
+        )
+        try:
+            loop.run_until_complete(
+                _mark_scrape_failed(scrape_url_id, job_id, str(exc))
+            )
+        except Exception:
+            pass
+        return {
+            "scrape_url_id": scrape_url_id,
+            "job_id": job_id,
+            "success": False,
+            "error": str(exc),
+        }
+
+
+async def _mark_scrape_failed(
+    scrape_url_id: str, job_id: str, error: str
+) -> None:
+    """Helper to mark a scrape job as FAILED and reset URL status."""
+    from uuid import UUID
+    from ..database.connection import AsyncSessionLocal
+    from ..services.scrape_job_service import ScrapeJobService
+    from ..services.url_db_service import UrlDbService
+    from ..db_models.scrape_url import UrlStatus
+
+    async with AsyncSessionLocal() as db:
+        job_service = ScrapeJobService(db)
+        url_service = UrlDbService(db)
+        await job_service.fail_job(UUID(job_id), error)
+        await url_service.update_url_status(
+            UUID(scrape_url_id), UrlStatus.ERROR, error
+        )

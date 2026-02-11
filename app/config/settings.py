@@ -119,6 +119,8 @@ class Settings(BaseSettings):
     worker_concurrency: int = 4
     worker_max_retries: int = 3
     worker_retry_delay: int = 60
+    scrape_task_soft_time_limit: int = 3600   # 1 hour soft limit for scrape tasks
+    scrape_task_time_limit: int = 3660        # 1 hour + 1 min hard kill
 
     @property
     def max_upload_size_bytes(self) -> int:
