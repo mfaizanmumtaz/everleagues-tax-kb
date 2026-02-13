@@ -278,7 +278,9 @@ async def _process_single_page(
         # Step 4: Create DocumentRegistry entry
         jurisdiction = scrape_url.jurisdiction or "federal"
         try:
-            registry = await registry_service.create_for_upload(
+            registry = await registry_service.create_for_scrape(
+                scrape_url_id=scrape_url.id,
+                scrape_job_id=job_id,
                 document_name=filename,
                 source_url=page.url,
                 title=page.title or filename,

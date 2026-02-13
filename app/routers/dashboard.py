@@ -12,6 +12,8 @@ from ..database.connection import get_db
 from ..db_models.scrape_url import ScrapeUrl, UrlStatus
 from ..db_models.scrape_job import ScrapeJob, JobStatus
 
+import math
+
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
 
@@ -147,10 +149,15 @@ async def get_rag_health():
         total_chunks = chunk_stats.get("total", 0)
 
         # Calculate averages
-        avg_chunks = total_chunks / total_docs if total_docs > 0 else 0
+        avg_chunks = total_chunks / total_docs if total_docs > 0 else 0.0
 
         token_stats = chunk_stats.get("stats", {}).get("tokenCount", {})
         avg_tokens = token_stats.get("mean", 0) if token_stats else 0
+        
+        if not isinstance(avg_chunks, (int, float)) or (isinstance(avg_chunks, float) and math.isnan(avg_chunks)):
+            avg_chunks = 0.0
+        if not isinstance(avg_tokens, (int, float)) or (isinstance(avg_tokens, float) and math.isnan(avg_tokens)):
+            avg_tokens = 0.0
 
         # Parse facets for coverage
         doc_facets = doc_stats.get("facets", {})

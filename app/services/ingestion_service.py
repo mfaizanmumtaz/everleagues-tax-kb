@@ -306,6 +306,7 @@ async def _run_pipeline(
             effective_to=effective_to,
             applies_to_tax_years=meta.get("applies_to_tax_years", []),
             applies_to_jurisdictions=meta.get("applies_to_jurisdictions", []),
+            source_type="api" if source == "api_push" else source,
         )
 
         # Step 4: Create Solr document
