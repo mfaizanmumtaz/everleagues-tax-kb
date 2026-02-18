@@ -1,6 +1,7 @@
 """Azure Blob Storage service for file management."""
 
 import hashlib
+import logging
 import uuid
 from datetime import datetime
 from typing import Optional, Tuple, BinaryIO
@@ -8,6 +9,8 @@ from azure.storage.blob import BlobServiceClient, ContentSettings
 from azure.core.exceptions import ResourceNotFoundError
 
 from ..config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class BlobStorageService:
@@ -17,26 +20,40 @@ class BlobStorageService:
         """Initialize blob storage client."""
         self._client: Optional[BlobServiceClient] = None
 
+    def _create_client(self) -> BlobServiceClient:
+        """Create a fresh BlobServiceClient."""
+        if settings.azure_storage_connection_string:
+            return BlobServiceClient.from_connection_string(
+                settings.azure_storage_connection_string
+            )
+        elif (
+            settings.azure_storage_account_name
+            and settings.azure_storage_account_key
+        ):
+            account_url = f"https://{settings.azure_storage_account_name}.blob.core.windows.net"
+            return BlobServiceClient(
+                account_url=account_url,
+                credential=settings.azure_storage_account_key,
+            )
+        else:
+            raise ValueError("Azure Blob Storage credentials not configured")
+
     @property
     def client(self) -> BlobServiceClient:
         """Get or create blob service client."""
         if self._client is None:
-            if settings.azure_storage_connection_string:
-                self._client = BlobServiceClient.from_connection_string(
-                    settings.azure_storage_connection_string
-                )
-            elif (
-                settings.azure_storage_account_name
-                and settings.azure_storage_account_key
-            ):
-                account_url = f"https://{settings.azure_storage_account_name}.blob.core.windows.net"
-                self._client = BlobServiceClient(
-                    account_url=account_url,
-                    credential=settings.azure_storage_account_key,
-                )
-            else:
-                raise ValueError("Azure Blob Storage credentials not configured")
+            self._client = self._create_client()
         return self._client
+
+    def _reset_client(self) -> None:
+        """Drop the current client so the next access creates a fresh one."""
+        logger.warning("Resetting Azure Blob Storage client due to connection failure")
+        try:
+            if self._client:
+                self._client.close()
+        except Exception:
+            pass
+        self._client = None
 
     def _ensure_container_exists(self, container_name: str) -> None:
         """Ensure container exists, create if not."""
@@ -107,9 +124,6 @@ class BlobStorageService:
         checksum = self._calculate_checksum(file_data)
         file_size = len(file_data)
 
-        # Upload blob
-        blob_client = self.client.get_blob_client(container=container, blob=blob_path)
-
         content_settings = ContentSettings(
             content_type=self._get_content_type(filename)
         )
@@ -122,16 +136,26 @@ class BlobStorageService:
         if metadata:
             blob_metadata.update(metadata)
 
-        blob_client.upload_blob(
-            file_data,
-            content_settings=content_settings,
-            metadata=blob_metadata,
-            overwrite=True,
-        )
-
-        blob_url = blob_client.url
-
-        return blob_path, blob_url, checksum, file_size
+        # Retry once with a fresh client on connection/SSL failures
+        for attempt in range(2):
+            try:
+                blob_client = self.client.get_blob_client(
+                    container=container, blob=blob_path
+                )
+                blob_client.upload_blob(
+                    file_data,
+                    content_settings=content_settings,
+                    metadata=blob_metadata,
+                    overwrite=True,
+                )
+                blob_url = blob_client.url
+                return blob_path, blob_url, checksum, file_size
+            except (ConnectionError, OSError, TimeoutError) as e:
+                if attempt == 0:
+                    logger.warning(f"Blob upload failed (attempt 1), reconnecting: {e}")
+                    self._reset_client()
+                else:
+                    raise
 
     def upload_stream(
         self,

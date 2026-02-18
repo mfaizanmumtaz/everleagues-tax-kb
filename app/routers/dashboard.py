@@ -1,9 +1,18 @@
 """Dashboard API routes."""
 
-from fastapi import APIRouter, HTTPException
-from typing import Dict, List
+from datetime import datetime, timezone, timedelta
+from fastapi import APIRouter, HTTPException, Depends
+from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, func
+
 from ..services.solr_service import get_solr_service
+from ..database.connection import get_db
+from ..db_models.scrape_url import ScrapeUrl, UrlStatus
+from ..db_models.scrape_job import ScrapeJob, JobStatus
+
+import math
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
@@ -140,10 +149,15 @@ async def get_rag_health():
         total_chunks = chunk_stats.get("total", 0)
 
         # Calculate averages
-        avg_chunks = total_chunks / total_docs if total_docs > 0 else 0
+        avg_chunks = total_chunks / total_docs if total_docs > 0 else 0.0
 
         token_stats = chunk_stats.get("stats", {}).get("tokenCount", {})
         avg_tokens = token_stats.get("mean", 0) if token_stats else 0
+        
+        if not isinstance(avg_chunks, (int, float)) or (isinstance(avg_chunks, float) and math.isnan(avg_chunks)):
+            avg_chunks = 0.0
+        if not isinstance(avg_tokens, (int, float)) or (isinstance(avg_tokens, float) and math.isnan(avg_tokens)):
+            avg_tokens = 0.0
 
         # Parse facets for coverage
         doc_facets = doc_stats.get("facets", {})
@@ -256,6 +270,302 @@ async def get_alerts():
         return AlertsResponse(
             alerts=alerts,
             total=len(alerts),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== Freshness Endpoint ====================
+
+
+class StaleDocument(BaseModel):
+    """A document that has not been updated recently."""
+
+    id: str
+    name: str
+    last_updated: str
+    days_stale: int
+    source_url: Optional[str] = None
+
+
+class RecentUrlActivity(BaseModel):
+    """Recent URL scraping activity."""
+
+    id: str
+    url: str
+    last_scraped_at: Optional[str] = None
+    status: str
+    documents_count: int
+
+
+class FreshnessMetrics(BaseModel):
+    """Document freshness metrics."""
+
+    docs_stale_over_30_days: int = 0
+    docs_stale_over_1_year: int = 0
+    docs_stale_over_2_years: int = 0
+    urls_scraped_last_7_days: int = 0
+    stale_documents: List[StaleDocument] = []
+    recent_url_activity: List[RecentUrlActivity] = []
+
+
+@router.get("/freshness", response_model=FreshnessMetrics)
+async def get_freshness_metrics(db: AsyncSession = Depends(get_db)):
+    """
+    Get document freshness metrics.
+
+    Queries Solr for stale documents and PostgreSQL for URL scraping activity.
+    """
+    try:
+        solr = get_solr_service()
+        now = datetime.now(timezone.utc)
+
+        # Solr date queries for stale documents
+        docs_30d = 0
+        docs_1y = 0
+        docs_2y = 0
+        stale_docs_list: List[StaleDocument] = []
+
+        try:
+            # Count documents not updated in 30+ days
+            _, docs_30d = await solr.search_documents(
+                query="*:*",
+                filters=["updatedAt:[* TO NOW-30DAY]"],
+                rows=0,
+            )
+        except Exception:
+            pass
+
+        try:
+            # Count documents not updated in 1+ year
+            _, docs_1y = await solr.search_documents(
+                query="*:*",
+                filters=["updatedAt:[* TO NOW-365DAY]"],
+                rows=0,
+            )
+        except Exception:
+            pass
+
+        try:
+            # Count documents not updated in 2+ years
+            _, docs_2y = await solr.search_documents(
+                query="*:*",
+                filters=["updatedAt:[* TO NOW-730DAY]"],
+                rows=0,
+            )
+        except Exception:
+            pass
+
+        try:
+            # Get top 10 stalest documents
+            # Note: updatedAt lacks docValues in Solr, so we sort in Python instead
+            stale_results, _ = await solr.search_documents(
+                query="*:*",
+                filters=["updatedAt:[* TO NOW-30DAY]"],
+                fields=["id", "name", "updatedAt", "sourceUrl"],
+                rows=50,
+            )
+            # Sort by updatedAt ascending (stalest first) in Python
+            stale_results.sort(key=lambda d: d.get("updatedAt", ""), reverse=False)
+            for doc in stale_results:
+                updated_str = doc.get("updatedAt", "")
+                days_stale = 0
+                if updated_str:
+                    try:
+                        updated_dt = datetime.fromisoformat(
+                            updated_str.replace("Z", "+00:00")
+                        )
+                        days_stale = (now - updated_dt).days
+                    except Exception:
+                        pass
+
+                stale_docs_list.append(
+                    StaleDocument(
+                        id=doc.get("id", ""),
+                        name=doc.get("name", "Unknown"),
+                        last_updated=updated_str,
+                        days_stale=days_stale,
+                        source_url=doc.get("sourceUrl"),
+                    )
+                )
+        except Exception:
+            pass
+
+        # PostgreSQL: URLs scraped in last 7 days
+        seven_days_ago = now - timedelta(days=7)
+        urls_scraped_count = 0
+        recent_activity: List[RecentUrlActivity] = []
+
+        try:
+            count_result = await db.execute(
+                select(func.count(ScrapeUrl.id)).where(
+                    ScrapeUrl.last_scraped_at >= seven_days_ago
+                )
+            )
+            urls_scraped_count = count_result.scalar() or 0
+
+            # Recent URL activity (top 10 most recently updated)
+            url_result = await db.execute(
+                select(ScrapeUrl)
+                .order_by(ScrapeUrl.updated_at.desc())
+                .limit(10)
+            )
+            for url in url_result.scalars().all():
+                recent_activity.append(
+                    RecentUrlActivity(
+                        id=str(url.id),
+                        url=url.url,
+                        last_scraped_at=url.last_scraped_at.isoformat()
+                        if url.last_scraped_at
+                        else None,
+                        status=url.status.value if url.status else "active",
+                        documents_count=url.documents_count or 0,
+                    )
+                )
+        except Exception:
+            pass
+
+        return FreshnessMetrics(
+            docs_stale_over_30_days=docs_30d,
+            docs_stale_over_1_year=docs_1y,
+            docs_stale_over_2_years=docs_2y,
+            urls_scraped_last_7_days=urls_scraped_count,
+            stale_documents=stale_docs_list,
+            recent_url_activity=recent_activity,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== Scalability Endpoint ====================
+
+
+class ScalabilityMetrics(BaseModel):
+    """System scalability metrics."""
+
+    total_documents: int = 0
+    total_chunks: int = 0
+    total_urls: int = 0
+    active_urls: int = 0
+    total_jobs_last_24h: int = 0
+    documents_processed_last_24h: int = 0
+    avg_job_duration_seconds: float = 0.0
+    job_success_rate: float = 0.0
+    documents_by_status: Dict[str, int] = {}
+
+
+@router.get("/scalability", response_model=ScalabilityMetrics)
+async def get_scalability_metrics(db: AsyncSession = Depends(get_db)):
+    """
+    Get system scalability metrics.
+
+    Queries Solr for document/chunk counts and PostgreSQL for URL/job statistics.
+    """
+    try:
+        solr = get_solr_service()
+        now = datetime.now(timezone.utc)
+        twenty_four_hours_ago = now - timedelta(hours=24)
+
+        # Solr counts
+        total_documents = 0
+        total_chunks = 0
+        docs_by_status: Dict[str, int] = {}
+
+        try:
+            doc_stats = await solr.get_document_stats()
+            chunk_stats = await solr.get_chunk_stats()
+            total_documents = doc_stats.get("total", 0)
+            total_chunks = chunk_stats.get("total", 0)
+
+            doc_facets = doc_stats.get("facets", {})
+            docs_by_status = _parse_facet_counts(doc_facets, "indexStatus")
+        except Exception:
+            pass
+
+        # PostgreSQL: URL counts
+        total_urls = 0
+        active_urls = 0
+
+        try:
+            total_result = await db.execute(select(func.count(ScrapeUrl.id)))
+            total_urls = total_result.scalar() or 0
+
+            active_result = await db.execute(
+                select(func.count(ScrapeUrl.id)).where(
+                    ScrapeUrl.status == UrlStatus.ACTIVE
+                )
+            )
+            active_urls = active_result.scalar() or 0
+        except Exception:
+            pass
+
+        # PostgreSQL: Job stats (last 24h)
+        total_jobs_24h = 0
+        docs_processed_24h = 0
+        avg_duration = 0.0
+        success_rate = 0.0
+
+        try:
+            # Total jobs in last 24h
+            jobs_count_result = await db.execute(
+                select(func.count(ScrapeJob.id)).where(
+                    ScrapeJob.created_at >= twenty_four_hours_ago
+                )
+            )
+            total_jobs_24h = jobs_count_result.scalar() or 0
+
+            # Documents processed in last 24h
+            docs_result = await db.execute(
+                select(func.coalesce(func.sum(ScrapeJob.documents_created), 0)).where(
+                    ScrapeJob.created_at >= twenty_four_hours_ago
+                )
+            )
+            docs_processed_24h = docs_result.scalar() or 0
+
+            # Average job duration (completed jobs)
+            avg_result = await db.execute(
+                select(func.avg(ScrapeJob.duration_seconds)).where(
+                    ScrapeJob.status == JobStatus.COMPLETED,
+                    ScrapeJob.duration_seconds.isnot(None),
+                )
+            )
+            avg_val = avg_result.scalar()
+            avg_duration = round(float(avg_val), 2) if avg_val else 0.0
+
+            # Success rate (all time)
+            total_finished = await db.execute(
+                select(func.count(ScrapeJob.id)).where(
+                    ScrapeJob.status.in_([
+                        JobStatus.COMPLETED,
+                        JobStatus.FAILED,
+                        JobStatus.CANCELLED,
+                    ])
+                )
+            )
+            finished_count = total_finished.scalar() or 0
+
+            completed_count_result = await db.execute(
+                select(func.count(ScrapeJob.id)).where(
+                    ScrapeJob.status == JobStatus.COMPLETED
+                )
+            )
+            completed_count = completed_count_result.scalar() or 0
+
+            if finished_count > 0:
+                success_rate = round((completed_count / finished_count) * 100, 1)
+        except Exception:
+            pass
+
+        return ScalabilityMetrics(
+            total_documents=total_documents,
+            total_chunks=total_chunks,
+            total_urls=total_urls,
+            active_urls=active_urls,
+            total_jobs_last_24h=total_jobs_24h,
+            documents_processed_last_24h=docs_processed_24h,
+            avg_job_duration_seconds=avg_duration,
+            job_success_rate=success_rate,
+            documents_by_status=docs_by_status,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

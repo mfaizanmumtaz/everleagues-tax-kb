@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     azure_container_raw: str = "raw-documents"
     azure_container_processed: str = "processed-documents"
     azure_container_uploads: str = "uploads"
+    azure_container_api_pushed: str = "api-pushed"
 
     # ===========================================
     # Embedding Configuration
@@ -109,6 +110,17 @@ class Settings(BaseSettings):
         ".htm",
     ]
     process_uploads_sync: bool = True  # Process immediately vs background
+
+    # ===========================================
+    # Celery / Queue Configuration
+    # ===========================================
+    celery_broker_url: str = "redis://localhost:6379/0"
+    celery_result_backend: str = "redis://localhost:6379/1"
+    worker_concurrency: int = 4
+    worker_max_retries: int = 3
+    worker_retry_delay: int = 60
+    scrape_task_soft_time_limit: int = 3600   # 1 hour soft limit for scrape tasks
+    scrape_task_time_limit: int = 3660        # 1 hour + 1 min hard kill
 
     @property
     def max_upload_size_bytes(self) -> int:

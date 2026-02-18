@@ -156,6 +156,8 @@ class DocumentService:
             superseded_by=doc.get("supersededBy"),
             is_latest_for_tax_year=doc.get("isLatestForTaxYear", True),
             has_newer_version=doc.get("hasNewerVersion", False),
+            # Source tracking
+            source_type=doc.get("sourceType"),
             # Timestamps
             uploaded_date=doc.get("uploadedDate"),
             last_synced=doc.get("lastSynced"),
@@ -203,6 +205,8 @@ class DocumentService:
             "effectiveTo": self._format_date_for_solr(doc.effective_to),
             "appliesToTaxYears": doc.applies_to_tax_years,
             "appliesToJurisdictions": doc.applies_to_jurisdictions,
+            # Source tracking
+            "sourceType": doc.source_type,
             # Status defaults
             "syncStatus": "synced",
             "indexStatus": "not_indexed",

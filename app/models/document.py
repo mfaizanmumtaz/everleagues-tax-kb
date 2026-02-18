@@ -81,6 +81,9 @@ class DocumentCreate(DocumentBase):
 
     size: Optional[str] = Field(default=None, description="File size")
     knowledge_base_id: str = Field(default="default", description="Knowledge base ID")
+    source_type: Optional[str] = Field(
+        default=None, description="Document source type (upload, scrape, api)"
+    )
 
 
 class DocumentUpdate(BaseModel):
@@ -152,6 +155,11 @@ class DocumentResponse(DocumentBase):
     superseded_by: Optional[str] = None
     is_latest_for_tax_year: bool = True
     has_newer_version: bool = False
+
+    # Source tracking
+    source_type: Optional[str] = Field(
+        default=None, description="Document source type (upload, scrape, api)"
+    )
 
     # Timestamps
     uploaded_date: Optional[datetime] = None

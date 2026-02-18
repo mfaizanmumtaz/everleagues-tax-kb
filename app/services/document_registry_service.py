@@ -5,6 +5,7 @@ from typing import Optional, List
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from ..db_models.document_registry import (
     DocumentRegistry,
@@ -92,6 +93,71 @@ class DocumentRegistryService:
         await self.db.refresh(registry)
         return registry
 
+    async def create_for_api_push(
+        self,
+        external_file_id: str,
+        document_name: str,
+        source_url: Optional[str] = None,
+        title: Optional[str] = None,
+        jurisdiction: Optional[str] = None,
+        state: Optional[str] = None,
+        city: Optional[str] = None,
+        tax_year: Optional[int] = None,
+        doc_type: Optional[str] = None,
+    ) -> DocumentRegistry:
+        """Create a registry entry for an API-pushed document."""
+        registry = DocumentRegistry(
+            source_type=SourceType.API,
+            processing_status=ProcessingStatus.PENDING,
+            external_file_id=external_file_id,
+            document_name=document_name,
+            title=title or document_name,
+            jurisdiction=jurisdiction,
+            state=state,
+            city=city,
+            tax_year=tax_year,
+            doc_type=doc_type,
+            source_url=source_url,
+            governance_state="pending",
+            version=1,
+            is_latest=True,
+            chunk_count=0,
+            needs_review=False,
+        )
+
+        self.db.add(registry)
+        await self.db.commit()
+        await self.db.refresh(registry)
+        return registry
+
+    async def get_by_external_file_id(self, external_file_id: str) -> Optional[DocumentRegistry]:
+        """Find registry by external file ID (for API-pushed documents)."""
+        stmt = (
+            select(DocumentRegistry)
+            .options(selectinload(DocumentRegistry.blobs))
+            .where(DocumentRegistry.external_file_id == external_file_id)
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def mark_for_replacement(
+        self,
+        registry_id: UUID,
+    ) -> Optional[DocumentRegistry]:
+        """Mark a document as replaced and needing review."""
+        from datetime import datetime
+        registry = await self.get_by_id(registry_id)
+        if not registry:
+            return None
+
+        registry.needs_review = True
+        registry.replaced_at = datetime.utcnow()
+        registry.processing_status = ProcessingStatus.PENDING
+        
+        await self.db.commit()
+        await self.db.refresh(registry)
+        return registry
+
     async def update_processing_status(
         self,
         registry_id: UUID,
@@ -130,6 +196,16 @@ class DocumentRegistryService:
 
     async def get_by_id(self, registry_id: UUID) -> Optional[DocumentRegistry]:
         stmt = select(DocumentRegistry).where(DocumentRegistry.id == registry_id)
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_with_blob(self, registry_id: UUID) -> Optional[DocumentRegistry]:
+        """Get registry entry with eagerly loaded blob records."""
+        stmt = (
+            select(DocumentRegistry)
+            .where(DocumentRegistry.id == registry_id)
+            .options(selectinload(DocumentRegistry.blobs))
+        )
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 

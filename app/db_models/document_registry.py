@@ -28,6 +28,7 @@ class SourceType(str, enum.Enum):
 class ProcessingStatus(str, enum.Enum):
     """Document processing status."""
     PENDING = "pending"
+    QUEUED = "queued"
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
@@ -90,6 +91,11 @@ class DocumentRegistry(Base, UUIDMixin, TimestampMixin):
 
     # Chunk count (denormalized)
     chunk_count = Column(Integer, default=0)
+
+    # API Push tracking
+    external_file_id = Column(String(255), unique=True, nullable=True, index=True)
+    needs_review = Column(Boolean, default=False, index=True)
+    replaced_at = Column(DateTime(timezone=True))
 
     # Relationships
     scrape_url = relationship("ScrapeUrl", back_populates="document_registries")

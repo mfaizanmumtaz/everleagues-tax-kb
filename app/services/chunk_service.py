@@ -44,7 +44,7 @@ class ChunkService:
         if filters.category:
             categories = " OR ".join(filters.category)
             fq.append(f"category:({categories})")
-
+ 
         if filters.authority_level:
             fq.append(f"authorityLevel:{filters.authority_level}")
 

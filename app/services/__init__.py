@@ -12,6 +12,11 @@ from .audit_log_service import AuditLogService
 from .scrape_job_service import ScrapeJobService
 from .document_registry_service import DocumentRegistryService
 
+# Discovery Services
+from .discovery_service import DiscoveryService
+from .discovered_page_service import DiscoveredPageService
+from .path_rule_service import PathRuleService
+
 # Azure Blob Storage Service
 from .blob_storage_service import BlobStorageService, get_blob_storage_service
 
@@ -35,6 +40,10 @@ __all__ = [
     "AuditLogService",
     "ScrapeJobService",
     "DocumentRegistryService",
+    # Discovery Services
+    "DiscoveryService",
+    "DiscoveredPageService",
+    "PathRuleService",
     # Azure Blob Storage
     "BlobStorageService",
     "get_blob_storage_service",
@@ -46,3 +55,4 @@ __all__ = [
     "LLMService",
     "get_llm_service",
 ]
+

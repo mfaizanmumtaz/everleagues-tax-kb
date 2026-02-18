@@ -1,6 +1,6 @@
 """Scrape Job service for PostgreSQL."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List, Tuple
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -134,7 +134,7 @@ class ScrapeJobService:
             return None
 
         job.status = JobStatus.RUNNING
-        job.started_at = datetime.utcnow()
+        job.started_at = datetime.now(timezone.utc)
         job.progress_message = "Job started"
 
         await self.db.commit()
@@ -177,7 +177,7 @@ class ScrapeJobService:
         if not job:
             return None
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         job.status = JobStatus.COMPLETED
         job.completed_at = now
@@ -208,7 +208,7 @@ class ScrapeJobService:
         if not job:
             return None
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         job.status = JobStatus.FAILED
         job.completed_at = now
@@ -236,7 +236,7 @@ class ScrapeJobService:
             return job  # Can't cancel already finished jobs
 
         job.status = JobStatus.CANCELLED
-        job.completed_at = datetime.utcnow()
+        job.completed_at = datetime.now(timezone.utc)
         job.progress_message = "Job cancelled"
 
         await self.db.commit()
