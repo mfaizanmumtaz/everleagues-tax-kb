@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     # ===========================================
     # CORS Configuration
     # ===========================================
-    cors_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
+    cors_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000","https://eltaxdevsvcserver.everleagues.com"]
     cors_allow_credentials: bool = True
     cors_allow_methods: list[str] = ["*"]
     cors_allow_headers: list[str] = ["*"]
