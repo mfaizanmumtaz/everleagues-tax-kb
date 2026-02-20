@@ -1,5 +1,7 @@
 """Celery application configuration for the document ingestion worker."""
 
+import ssl
+
 from celery import Celery
 from ..config import settings
 
@@ -7,6 +9,15 @@ celery_app = Celery(
     "everleagues_worker",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
+)
+
+celery_app.conf.update(
+    broker_use_ssl={
+        'ssl_cert_reqs': ssl.CERT_NONE
+    },
+    redis_backend_use_ssl={
+        'ssl_cert_reqs': ssl.CERT_NONE
+    }
 )
 
 celery_app.conf.update(
