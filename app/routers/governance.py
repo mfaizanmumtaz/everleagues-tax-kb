@@ -3,7 +3,6 @@
 from fastapi import APIRouter, HTTPException, Query, Path, Depends
 from typing import Optional, List
 from datetime import datetime
-from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.common import GovernanceState
@@ -12,41 +11,14 @@ from ..services.solr_service import get_solr_service
 from ..services.audit_log_service import AuditLogService
 from ..database.connection import get_db
 
+# Import Pydantic models from models directory
+from ..models.governance import (
+    GovernanceLogEntry,
+    GovernanceLogsResponse,
+    GovernanceLogCreate,
+)
+
 router = APIRouter(prefix="/governance", tags=["Governance"])
-
-
-class GovernanceLogEntry(BaseModel):
-    """A governance log entry."""
-
-    id: str
-    document_id: str
-    document_name: str
-    from_state: Optional[str] = None
-    to_state: str
-    changed_by: str
-    reason: Optional[str] = None
-    timestamp: datetime
-
-
-class GovernanceLogsResponse(BaseModel):
-    """Response for governance logs."""
-
-    items: List[GovernanceLogEntry]
-    total: int
-    page: int
-    limit: int
-    pages: int
-    has_next: bool
-    has_prev: bool
-
-
-class GovernanceLogCreate(BaseModel):
-    """Request to create a governance log entry."""
-
-    document_id: str = Field(..., description="Document ID")
-    to_state: GovernanceState = Field(..., description="New governance state")
-    changed_by: str = Field(..., description="User who made the change")
-    reason: Optional[str] = Field(default=None, description="Reason for the change")
 
 
 @router.get("/logs", response_model=GovernanceLogsResponse)

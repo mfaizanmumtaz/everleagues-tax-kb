@@ -3,43 +3,18 @@
 from fastapi import APIRouter, HTTPException, Query, Path, Depends
 from typing import Optional, List
 from datetime import datetime
-from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database.connection import get_db
 from ..services.audit_log_service import AuditLogService
 
+# Import Pydantic models from models directory
+from ..models.audit import (
+    AuditLogResponse,
+    AuditLogsListResponse,
+)
+
 router = APIRouter(prefix="/audit", tags=["Audit"])
-
-
-# ==================== Pydantic Models ====================
-
-
-class AuditLogResponse(BaseModel):
-    """Audit log entry response."""
-
-    id: str
-    action: str
-    resource_type: str
-    resource_id: Optional[str] = None
-    resource_name: Optional[str] = None
-    actor: Optional[str] = None
-    old_values: Optional[dict] = None
-    new_values: Optional[dict] = None
-    details: Optional[str] = None
-    created_at: Optional[datetime] = None
-
-
-class AuditLogsListResponse(BaseModel):
-    """Response for audit logs list."""
-
-    items: List[AuditLogResponse]
-    total: int
-    page: int
-    limit: int
-    pages: int
-    has_next: bool
-    has_prev: bool
 
 
 # ==================== API Endpoints ====================
