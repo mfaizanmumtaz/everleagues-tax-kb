@@ -27,6 +27,10 @@ class DashboardStats(BaseModel):
     )
     chunks_by_jurisdiction: Dict[str, int] = Field(description="Chunks by jurisdiction")
     chunks_by_tax_year: Dict[str, int] = Field(description="Chunks by tax year")
+    ontology_stats: Optional[OntologyStats] = Field(
+        default=None,
+        description="Ontology graph stats (when Neo4j is configured)",
+    )
 
 
 class RAGHealthMetrics(BaseModel):

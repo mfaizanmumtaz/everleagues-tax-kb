@@ -122,6 +122,5 @@ data/
 tests/
 frontend/
 .venv/
-init_database.py
 .env
 docs/

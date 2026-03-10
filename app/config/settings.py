@@ -12,6 +12,17 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     # ===========================================
+    # Neo4j (Graph / Ontology) Configuration
+    # ===========================================
+    neo4j_uri: Optional[str] = None  # e.g. neo4j+s://xxxx.databases.neo4j.io
+    neo4j_username: Optional[str] = None
+    neo4j_password: Optional[str] = None
+    neo4j_database: str = "neo4j"
+
+    # Optional: list of OWL/RDF ontology URLs or paths for industry ontology import
+    ontology_owl_urls: list[str] = []
+
+    # ===========================================
     # PostgreSQL Database Configuration
     # ===========================================
     database_url: str = "postgresql://taxkb_user:password@localhost:5432/tax_kb"
@@ -70,7 +81,7 @@ class Settings(BaseSettings):
     # API Configuration
     # ===========================================
     api_host: str = "0.0.0.0"
-    api_port: int = 8000
+    api_port: int = 8001
     api_prefix: str = "/api"
     debug: bool = False
 

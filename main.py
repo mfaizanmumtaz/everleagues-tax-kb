@@ -17,6 +17,14 @@ async def lifespan(app: FastAPI):
     # Startup
     print("Starting Tax KB API...")
 
+    # Initialize database: create tables if they do not exist
+    try:
+        from app.database.connection import init_db
+        init_db()
+        print("  Database tables: OK (created if needed)")
+    except Exception as e:
+        print(f"  Database init: ERROR ({e})")
+
     # Check PostgreSQL connection
     try:
         async with async_engine.connect() as conn:

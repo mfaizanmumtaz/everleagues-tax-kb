@@ -66,7 +66,7 @@ except Exception:
 
 
 def init_db() -> None:
-    """Initialize database tables."""
+    """Initialize database tables. Creates tables only if they do not exist."""
     from .base import Base
     from ..db_models import (
         ScrapeUrl,
@@ -78,6 +78,8 @@ def init_db() -> None:
         AuditLog,
         SystemSetting,
         ApiSource,
+        DiscoveredPage,
+        PathRule,
     )
 
     if sync_engine:

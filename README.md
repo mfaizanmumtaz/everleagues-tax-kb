@@ -97,18 +97,17 @@ uv sync
 # 3. Copy and configure environment variables
 cp .env.example .env   # or create .env manually (see Environment Variables section)
 
-# 4. Initialize the PostgreSQL database
-python init_database.py
-
-# 5. Ensure Solr collections exist
+# 4. Ensure Solr collections exist
 #    Create two collections: tax_documents and tax_chunks
 #    (See Solr Configuration section below)
 
-# 6. Run the development server
+# 5. Run the development server
 uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ### Running the Server
+
+PostgreSQL tables are created automatically on startup if they do not exist.
 
 ```bash
 # Option A: Using uvicorn directly
@@ -134,8 +133,7 @@ Once running, the API is available at:
 
 ```
 everleagues-tax-kb/
-|-- main.py                        # FastAPI app entry point, lifespan, CORS, router registration
-|-- init_database.py               # Creates all PostgreSQL tables
+|-- main.py                        # FastAPI app entry point, lifespan, CORS, router registration, DB init
 |-- pyproject.toml                 # Python project config & dependencies
 |-- uv.lock                       # Dependency lock file
 |-- .env                           # Environment variables (not committed)

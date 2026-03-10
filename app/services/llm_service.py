@@ -110,6 +110,7 @@ class LLMService:
         query: str,
         chunks: List[dict],
         additional_context: Optional[str] = None,
+        graph_context: Optional[str] = None,
     ) -> str:
         """
         Generate an answer based on retrieved chunks.
@@ -118,9 +119,8 @@ class LLMService:
             query: The user's question
             chunks: List of retrieved chunks with content and metadata
             additional_context: Optional additional context (e.g., filter information)
-
-        Returns:
-            Generated answer string with citations
+            graph_context: Optional ontology graph context for traceable citations
+                (e.g. "Concepts: WAGES_INCOME (IRC 61); Related forms: W-2, 1040 Line 1z")
         """
         if not chunks:
             return (
@@ -134,11 +134,20 @@ class LLMService:
         context = self._format_chunks_for_context(chunks)
 
         # Load prompts from files
+        combined_context = []
+        if graph_context:
+            combined_context.append(
+                f"Ontology context (use for traceable Concept -> Authority -> Form citations): {graph_context}"
+            )
+        if additional_context:
+            combined_context.append(additional_context)
+        context_str = "\n".join(combined_context) if combined_context else None
+
         system_prompt = get_rag_system_prompt()
         user_prompt = get_rag_user_prompt(
             query=query,
             context=context,
-            additional_context=additional_context,
+            additional_context=context_str,
         )
 
         # Create messages
@@ -163,6 +172,7 @@ class LLMService:
         query: str,
         chunks: List[dict],
         additional_context: Optional[str] = None,
+        graph_context: Optional[str] = None,
     ) -> str:
         """
         Synchronous version of generate_answer.
@@ -187,11 +197,20 @@ class LLMService:
         context = self._format_chunks_for_context(chunks)
 
         # Load prompts from files
+        combined_context = []
+        if graph_context:
+            combined_context.append(
+                f"Ontology context (use for traceable Concept -> Authority -> Form citations): {graph_context}"
+            )
+        if additional_context:
+            combined_context.append(additional_context)
+        context_str = "\n".join(combined_context) if combined_context else None
+
         system_prompt = get_rag_system_prompt()
         user_prompt = get_rag_user_prompt(
             query=query,
             context=context,
-            additional_context=additional_context,
+            additional_context=context_str,
         )
 
         # Create messages
@@ -200,7 +219,7 @@ class LLMService:
             HumanMessage(content=user_prompt),
         ]
 
-        # Generate response
+        # Generate response (sync)
         try:
             response = client.invoke(messages)
             return response.content
