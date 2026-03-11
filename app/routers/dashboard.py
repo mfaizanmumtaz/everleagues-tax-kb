@@ -68,42 +68,6 @@ async def get_dashboard_stats():
         token_stats = doc_stats.get("stats", {}).get("tokensIndexed", {})
         total_tokens = int(token_stats.get("sum", 0)) if token_stats else 0
 
-        ontology_stats = None
-        try:
-            neo4j = get_neo4j_service()
-            if neo4j.is_configured():
-                node_counts = await neo4j.execute_read(
-                    """
-                    MATCH (n)
-                    WITH labels(n) AS lbls
-                    UNWIND lbls AS lbl
-                    WITH lbl, count(*) AS cnt
-                    RETURN lbl AS label, cnt AS count
-                    ORDER BY cnt DESC
-                    """
-                )
-                rel_counts = await neo4j.execute_read(
-                    """
-                    MATCH ()-[r]->()
-                    WITH type(r) AS t, count(*) AS cnt
-                    RETURN t AS relationshipType, cnt AS count
-                    ORDER BY cnt DESC
-                    """
-                )
-                total_nodes_r = await neo4j.execute_read("MATCH (n) RETURN count(n) AS c")
-                total_rels_r = await neo4j.execute_read("MATCH ()-[r]->() RETURN count(r) AS c")
-                ontology_stats = OntologyStats(
-                    total_nodes=total_nodes_r[0]["c"] if total_nodes_r else 0,
-                    total_relationships=total_rels_r[0]["c"] if total_rels_r else 0,
-                    nodes_by_label=[{"label": r["label"], "count": r["count"]} for r in node_counts],
-                    relationships_by_type=[
-                        {"relationshipType": r["relationshipType"], "count": r["count"]}
-                        for r in rel_counts
-                    ],
-                )
-        except Exception:
-            pass
-
         return DashboardStats(
             total_documents=doc_stats.get("total", 0),
             total_chunks=chunk_stats.get("total", 0),
@@ -114,7 +78,6 @@ async def get_dashboard_stats():
             documents_by_jurisdiction=_parse_facet_counts(doc_facets, "jurisdiction"),
             chunks_by_jurisdiction=_parse_facet_counts(chunk_facets, "jurisdiction"),
             chunks_by_tax_year=_parse_facet_counts(chunk_facets, "taxYear"),
-            ontology_stats=ontology_stats,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

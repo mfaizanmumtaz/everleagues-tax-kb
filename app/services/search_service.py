@@ -325,9 +325,6 @@ class SearchService:
                     query=request.query,
                     chunks=chunks_for_llm,
                     additional_context=filter_context,
-                    graph_context=format_graph_context_for_llm(list(resolved_concept_ids))
-                    if resolved_concept_ids
-                    else None,
                 )
             except Exception as e:
                 # If LLM fails, continue without generated answer

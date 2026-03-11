@@ -14,10 +14,8 @@ from app.services.solr_service import get_solr_service
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan events."""
-    # Startup
     print("Starting Tax KB API...")
 
-    # Initialize database: create tables if they do not exist
     try:
         from app.database.connection import init_db
         init_db()
@@ -25,7 +23,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"  Database init: ERROR ({e})")
 
-    # Check PostgreSQL connection
     try:
         async with async_engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
@@ -62,7 +59,6 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Shutdown
     print("Shutting down Tax KB API...")
 
 
@@ -150,7 +146,6 @@ async def health_check():
         }
 
 
-# For running with uvicorn directly
 if __name__ == "__main__":
     import uvicorn
 
