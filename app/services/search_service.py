@@ -13,7 +13,6 @@ from ..models.search import (
 from ..models.common import FilterParams
 from .solr_service import get_solr_service, SolrService
 from .embedding_service import get_embedding_service, EmbeddingService
-from .llm_service import get_llm_service, LLMService
 
 
 class SearchService:
@@ -23,14 +22,12 @@ class SearchService:
         self,
         solr_service: SolrService = None,
         embedding_service: EmbeddingService = None,
-        llm_service: LLMService = None,
         alpha: float = None,
         beta: float = None,
         gamma: float = None,
     ):
         self.solr = solr_service or get_solr_service()
         self.embeddings = embedding_service or get_embedding_service()
-        self.llm = llm_service or get_llm_service()
 
         # Hybrid scoring weights: final_score = BM25 * alpha + vector * beta + authority * gamma
         self.alpha = alpha or settings.bm25_weight
@@ -289,47 +286,6 @@ class SearchService:
 
         source_documents = self._group_chunks_by_document(retrieved_chunks)
 
-        # Generate LLM answer if requested
-        generated_answer = None
-        if request.generate_answer and retrieved_chunks:
-            try:
-                # Convert retrieved chunks to dict format for LLM service
-                chunks_for_llm = [
-                    {
-                        "document_name": chunk.document_name,
-                        "content": chunk.content,
-                        "authority_level": chunk.authority_level,
-                        "tax_year": chunk.tax_year,
-                        "jurisdiction": chunk.jurisdiction,
-                        "state": chunk.state,
-                        "effective_from": str(chunk.effective_from) if chunk.effective_from else None,
-                        "source_url": chunk.source_url,
-                    }
-                    for chunk in retrieved_chunks
-                ]
-
-                # Build additional context from filters
-                filter_context = None
-                if request.filters:
-                    context_parts = []
-                    if request.filters.jurisdiction:
-                        context_parts.append(f"Jurisdiction: {request.filters.jurisdiction}")
-                    if request.filters.state:
-                        context_parts.append(f"State: {request.filters.state}")
-                    if request.filters.tax_year:
-                        context_parts.append(f"Tax Year: {request.filters.tax_year}")
-                    if context_parts:
-                        filter_context = ", ".join(context_parts)
-
-                generated_answer = await self.llm.generate_answer(
-                    query=request.query,
-                    chunks=chunks_for_llm,
-                    additional_context=filter_context,
-                )
-            except Exception as e:
-                # If LLM fails, continue without generated answer
-                generated_answer = f"Unable to generate answer: {str(e)}"
-
         search_time = (time.time() - start_time) * 1000
 
         return SearchResponse(
@@ -339,7 +295,6 @@ class SearchService:
             total_chunks=len(retrieved_chunks),
             search_time_ms=search_time,
             retrieval_mode=controls.retrieval_mode,
-            generated_answer=generated_answer,
             score_weights={"alpha": alpha, "beta": beta, "gamma": gamma},
         )
 

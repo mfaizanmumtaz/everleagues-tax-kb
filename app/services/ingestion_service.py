@@ -223,7 +223,8 @@ async def _run_pipeline(
                 existing_metadata = {
                     k: v for k, v in existing_metadata.items() if v is not None
                 }
-                classification = classifier.classify(
+                classification = await asyncio.to_thread(
+                    classifier.classify,
                     text=parse_result.text,
                     source_url=source_url,
                     filename=filename,

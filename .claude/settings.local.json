@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:python.langchain.com)",
+      "WebFetch(domain:docs.langchain.com)"
+    ]
+  }
+}

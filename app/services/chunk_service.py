@@ -1,7 +1,9 @@
 """Async chunk service for chunk operations."""
 
+import logging
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
+import tiktoken
 from ..models.chunk import (
     ChunkCreate,
     ChunkUpdate,
@@ -12,6 +14,16 @@ from ..models.chunk import (
 from ..models.common import FilterParams
 from .solr_service import get_solr_service, SolrService
 from .embedding_service import get_embedding_service, EmbeddingService
+
+logger = logging.getLogger(__name__)
+
+# Reuse a single tiktoken encoder — thread-safe and cheap after first load
+_tokenizer = tiktoken.get_encoding("cl100k_base")
+
+
+def _count_tokens(text: str) -> int:
+    """Count tokens using tiktoken cl100k_base (same encoder as the chunker)."""
+    return len(_tokenizer.encode(text))
 
 
 class ChunkService:
@@ -131,7 +143,7 @@ class ChunkService:
             "paragraphNumber": chunk.paragraph_number,
             "sectionTitle": chunk.section_title,
             "pageNumber": chunk.page_number,
-            "tokenCount": len(chunk.content.split()) if chunk.content else 0,
+            "tokenCount": _count_tokens(chunk.content) if chunk.content else 0,
             "charCount": len(chunk.content) if chunk.content else 0,
             # Timestamps
             "indexedAt": now,
@@ -173,17 +185,18 @@ class ChunkService:
     ) -> ChunkResponse:
         """Create a new chunk."""
         chunk_id = f"{chunk.document_id}_{chunk.chunk_index}"
+        logger.debug("Creating chunk: chunk_id=%s, document_id=%s", chunk_id, chunk.document_id)
 
         # Generate embedding if not provided and requested
         if generate_embedding and not chunk.vector and chunk.content:
             try:
                 chunk.vector = await self.embeddings.generate_embedding(chunk.content)
-            except Exception:
-                pass  # Continue without embedding
+            except Exception as e:
+                logger.warning("Embedding failed for chunk_id=%s: %s", chunk_id, e)
 
         solr_doc = self._create_to_solr(chunk, chunk_id)
-
         await self.solr.create_chunk(solr_doc)
+        logger.debug("Chunk created: chunk_id=%s, tokens=%s", chunk_id, solr_doc.get("tokenCount"))
 
         return await self.get_chunk(chunk_id)
 
@@ -192,8 +205,10 @@ class ChunkService:
         created = 0
         failed = 0
         errors = []
-
         solr_docs = []
+
+        logger.info("Bulk chunk create started: total=%d, generate_embeddings=%s",
+                    len(request.chunks), request.generate_embeddings)
 
         # Generate embeddings for all chunks that need them
         if request.generate_embeddings:
@@ -204,17 +219,15 @@ class ChunkService:
             ]
 
             if chunks_needing_embeddings:
+                logger.debug("Generating embeddings for %d chunks", len(chunks_needing_embeddings))
                 try:
                     texts = [chunk.content for _, chunk in chunks_needing_embeddings]
-                    # Use async embedding generation
                     embeddings = await self.embeddings.generate_embeddings(texts)
-
-                    # Assign embeddings back to chunks
-                    for (i, chunk), embedding in zip(
-                        chunks_needing_embeddings, embeddings
-                    ):
+                    for (i, chunk), embedding in zip(chunks_needing_embeddings, embeddings):
                         request.chunks[i].vector = embedding
+                    logger.debug("Embeddings generated successfully")
                 except Exception as e:
+                    logger.warning("Embedding generation failed for bulk chunks: %s", e)
                     errors.append(f"Embedding generation failed: {str(e)}")
 
         for chunk in request.chunks:
@@ -222,20 +235,22 @@ class ChunkService:
                 chunk_id = f"{chunk.document_id}_{chunk.chunk_index}"
                 solr_doc = self._create_to_solr(chunk, chunk_id)
                 solr_docs.append(solr_doc)
-
             except Exception as e:
                 failed += 1
                 errors.append(f"Chunk {chunk.chunk_index}: {str(e)}")
+                logger.warning("Failed to prepare chunk index=%d: %s", chunk.chunk_index, e)
 
         # Bulk insert to Solr
         if solr_docs:
             try:
                 await self.solr.create_chunks_bulk(solr_docs)
                 created = len(solr_docs)
+                logger.info("Bulk chunk insert done: created=%d, failed=%d", created, failed)
             except Exception as e:
                 failed += len(solr_docs)
                 errors.append(f"Bulk insert failed: {str(e)}")
                 created = 0
+                logger.error("Bulk insert to Solr failed: %s", e)
 
         return BulkChunkResponse(created=created, failed=failed, errors=errors)
 
@@ -245,6 +260,7 @@ class ChunkService:
         """Update a chunk."""
         existing = await self.solr.get_chunk(chunk_id)
         if not existing:
+            logger.warning("Update failed — chunk not found: chunk_id=%s", chunk_id)
             return None
 
         # Build update dict
@@ -283,40 +299,50 @@ class ChunkService:
 
         # Update token/char counts if content changed
         if "content" in update_dict:
-            update_dict["tokenCount"] = len(update_dict["content"].split())
+            update_dict["tokenCount"] = _count_tokens(update_dict["content"])
             update_dict["charCount"] = len(update_dict["content"])
 
         # Update timestamp
         update_dict["updatedAt"] = datetime.utcnow().isoformat() + "Z"
 
         await self.solr.update_chunk(chunk_id, update_dict)
+        logger.debug("Chunk updated: chunk_id=%s, fields=%s", chunk_id, list(update_dict.keys()))
 
         return await self.get_chunk(chunk_id)
 
     async def delete_chunk(self, chunk_id: str) -> bool:
         """Delete a chunk."""
-        return await self.solr.delete_chunk(chunk_id)
+        result = await self.solr.delete_chunk(chunk_id)
+        logger.info("Chunk deleted: chunk_id=%s, success=%s", chunk_id, result)
+        return result
 
     async def delete_chunks_by_document(self, document_id: str) -> bool:
         """Delete all chunks for a document."""
-        return await self.solr.delete_chunks_by_document(document_id)
+        result = await self.solr.delete_chunks_by_document(document_id)
+        logger.info("Chunks deleted for document: document_id=%s, success=%s", document_id, result)
+        return result
 
     async def update_denormalized_fields(
         self, document_id: str, updates: Dict[str, Any]
     ) -> int:
-        """Update denormalized fields on all chunks for a document."""
-        # Get all chunks for document
-        chunks, total = await self.solr.get_chunks_by_document(document_id, rows=10000)
+        """Update denormalized fields on all chunks for a document in a single bulk request."""
+        logger.info("Bulk updating chunks: document_id=%s, fields=%s", document_id, list(updates.keys()))
 
-        updated = 0
-        for chunk in chunks:
-            try:
-                await self.solr.update_chunk(chunk["id"], updates)
-                updated += 1
-            except Exception:
-                pass
+        # Count chunks first so we can return the number updated
+        _, total = await self.solr.get_chunks_by_document(document_id, rows=1)
 
-        return updated
+        if total == 0:
+            logger.info("No chunks found for document_id=%s, nothing to update", document_id)
+            return 0
+
+        success = await self.solr.update_chunks_by_document(document_id, updates)
+
+        if success:
+            logger.info("Bulk chunk update done: document_id=%s, chunks_updated=%d", document_id, total)
+        else:
+            logger.error("Bulk chunk update failed: document_id=%s", document_id)
+
+        return total if success else 0
 
 
 # Singleton instance

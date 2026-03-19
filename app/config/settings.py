@@ -63,13 +63,8 @@ class Settings(BaseSettings):
     # Model for document classification (metadata extraction)
     classifier_llm_model: str = "gpt-4o-mini"
     classifier_llm_temperature: float = 0.1
-    classifier_llm_max_tokens: int = 500
+    classifier_llm_max_tokens: int = 600
     
-    # Model for RAG answer generation
-    rag_llm_model: str = "gpt-4o-mini"
-    rag_llm_temperature: float = 0.1
-    rag_llm_max_tokens: int = 1500
-
     # ===========================================
     # Hybrid Search Weights
     # ===========================================
@@ -88,7 +83,7 @@ class Settings(BaseSettings):
     # ===========================================
     # CORS Configuration
     # ===========================================
-    cors_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000","https://eltaxdevsvcserver.everleagues.com"]
+    cors_origins: list[str] = ["http://localhost:8001","http://localhost:3001", "http://127.0.0.1:3000","https://eltaxdevsvcserver.everleagues.com"]
     cors_allow_credentials: bool = True
     cors_allow_methods: list[str] = ["*"]
     cors_allow_headers: list[str] = ["*"]

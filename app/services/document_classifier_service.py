@@ -16,14 +16,18 @@ The service analyzes document text and extracts:
 - Tax year (if applicable)
 """
 
-import json
+import logging
 import re
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 
+from pydantic import BaseModel, Field as PydanticField
+
 from ..config import settings
 from ..prompts import get_classifier_system_prompt, get_classifier_user_prompt
+
+logger = logging.getLogger(__name__)
 
 
 class DocType(str, Enum):
@@ -87,47 +91,95 @@ class DocumentClassifierService:
     4. Text pattern matching - For tax year, tags
     """
 
-    # URL patterns for authority level detection
+    # URL patterns for authority level detection.
+    # Based on the official US tax law authority hierarchy:
+    #   1 = IRC / Constitution / Tax Treaties  (statutory primary authority)
+    #   2 = Treasury Regulations               (administrative primary authority)
+    #   3 = IRS Published Guidance in IRB      (Rev. Rulings, Rev. Procs, Notices, Announcements)
+    #   4 = IRS Forms, Publications, IRM, Written Determinations (PLR/TAM/CCA)
+    #   5 = Federal case law + State primary authorities
+    #   6 = Secondary sources (Big-4, journals, treatises, general web)
     AUTHORITY_PATTERNS = {
-        1: [  # Level 1 - Statute/Regulation (Highest)
-            r"law\.cornell\.edu",
-            r"govinfo\.gov",
-            r"/irc/",
-            r"/cfr/",
-            r"treasury\.gov/regulations",
-            r"ecfr\.gov",
+        1: [  # Level 1 — IRC / U.S. Constitution / Tax Treaties (Statutory Primary)
+            r"uscode\.house\.gov/browse/prelim@title26",
+            r"govinfo\.gov/app/collection/uscode",
+            r"law\.cornell\.edu/uscode/text/26",
+            r"constitution\.congress\.gov",
+            r"irs\.gov/businesses/international-businesses/united-states-income-tax-treaties",
         ],
-        2: [  # Level 2 - Forms/Instructions
-            r"irs\.gov/forms-pubs",
-            r"irs\.gov/pub/irs-pdf",
-            r"/form-",
-            r"ftb\.ca\.gov/forms",
+        2: [  # Level 2 — Treasury Regulations / CFR Title 26 (Administrative Primary)
+            r"ecfr\.gov/current/title-26",
+            r"govinfo\.gov/app/collection/cfr",
+            r"law\.cornell\.edu/cfr/text/26",
+            r"federalregister\.gov",
+            r"treasury\.gov/resource-center/tax-policy",
         ],
-        3: [  # Level 3 - Rulings/Procedures
-            r"irs\.gov/pub/irs-drop",
-            r"revenue.ruling",
-            r"rev\.rul\.",
-            r"rev\.proc\.",
-            r"notice",
+        3: [  # Level 3 — IRS Published Guidance in IRB (Rev. Rulings, Rev. Procs, Notices)
+            r"irs\.gov/irb/",
+            r"irs\.gov/internal-revenue-bulletins",
+            r"irs\.gov/pub/irs-drop/rr-",        # Revenue Rulings
+            r"irs\.gov/pub/irs-drop/rp-",        # Revenue Procedures
+            r"irs\.gov/pub/irs-drop/n-",         # Notices
+            r"irs\.gov/pub/irs-drop/a-",         # Announcements
         ],
-        4: [  # Level 4 - FAQs/Publications
+        4: [  # Level 4 — IRS Forms/Publications/IRM + Written Determinations (PLR/TAM/CCA)
+            r"irs\.gov/forms-instructions",
+            r"irs\.gov/pub/irs-pdf/",
+            r"irs\.gov/publications/",
+            r"irs\.gov/pub/irs-prior/",
+            r"irs\.gov/irm/",
+            r"irs\.gov/pub/irs-wd/",             # PLRs, TAMs, CCAs, FSAs
+            r"irs\.gov/privacy-disclosure/foia-library",
+            r"irs\.gov/actions-on-decisions",
             r"irs\.gov/faqs",
-            r"irs\.gov/irm",
-            r"/faq",
-            r"/publication",
         ],
-        5: [  # Level 5 - Expert Sources
+        5: [  # Level 5 — Federal Case Law + State Primary Tax Authorities
+            # Federal courts
+            r"ustaxcourt\.gov",
+            r"supremecourt\.gov",
+            r"uscfc\.uscourts\.gov",
+            r"uscourts\.gov",
+            r"law\.justia\.com/cases/federal/",
+            r"casetext\.com",
+            # California
+            r"ftb\.ca\.gov",
+            r"cdtfa\.ca\.gov",
+            r"boe\.ca\.gov",
+            # New York
+            r"tax\.ny\.gov",
+            # Texas
+            r"comptroller\.texas\.gov/taxes",
+            # Florida
+            r"floridarevenue\.com",
+            # Illinois
+            r"tax\.illinois\.gov",
+            # Other major state revenue agencies
+            r"revenue\.state\.",
+            r"dor\.",
+            r"department\.of\.revenue\.",
+        ],
+        6: [  # Level 6 — Secondary / Professional / General Web (No binding authority)
+            # Big-4 and professional firms
             r"kpmg\.com",
             r"deloitte\.com",
             r"pwc\.com",
             r"ey\.com",
-            r"cch\.com",
-            r"thomsonreuters\.com",
-        ],
-        6: [  # Level 6 - Other/Low Authority
-            r"blog",
+            r"answerconnect\.cch\.com",
+            r"checkpoint\.thomsonreuters\.com",
+            r"bloomberglaw\.com",
+            r"taxnotes\.com",
+            r"viewpoint\.pwc\.com",
+            # News / general commentary
+            r"forbes\.com",
+            r"wsj\.com",
+            r"cnbc\.com",
+            r"bloomberg\.com",
+            r"wikipedia\.org",
             r"medium\.com",
             r"reddit\.com",
+            r"quora\.com",
+            r"linkedin\.com/pulse",
+            r"[./]blog[./]",
         ],
     }
 
@@ -165,15 +217,19 @@ class DocumentClassifierService:
         self.max_tokens = settings.classifier_llm_max_tokens
         self._client = None
 
-    def _get_openai_client(self):
-        """Lazy load OpenAI client."""
+    def _get_langchain_client(self):
+        """Lazy-load a ChatOpenAI instance for structured output."""
         if self._client is None and self.use_ai and self.api_key:
             try:
-                from openai import OpenAI
-
-                self._client = OpenAI(api_key=self.api_key)
+                from langchain_openai import ChatOpenAI
+                self._client = ChatOpenAI(
+                    api_key=self.api_key,
+                    model=self.model,
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens,
+                )
             except ImportError:
-                raise RuntimeError("openai package is required for AI classification")
+                raise RuntimeError("langchain-openai package is required for AI classification")
         return self._client
 
     def classify(
@@ -200,6 +256,11 @@ class DocumentClassifierService:
         result = ClassificationResult()
         errors = []
 
+        logger.debug(
+            "classify start: filename=%s, text_len=%s",
+            filename, len(text) if text else 0,
+        )
+
         # Initialize with existing metadata if provided
         if existing_metadata:
             result = self._apply_existing_metadata(result, existing_metadata)
@@ -213,6 +274,10 @@ class DocumentClassifierService:
             except Exception as e:
                 errors.append(f"AI classification failed: {str(e)}")
                 result.classified_by = "rules"
+                logger.warning(
+                    "classify ai_fallback: filename=%s, error=%s",
+                    filename, str(e),
+                )
         else:
             result.classified_by = "rules"
 
@@ -225,6 +290,10 @@ class DocumentClassifierService:
         result.confidence = self._calculate_confidence(result)
         result.classification_errors = errors
 
+        logger.info(
+            "classify done: filename=%s, by=%s, title=%s, doc_type=%s, confidence=%.2f",
+            filename, result.classified_by, result.title, result.doc_type, result.confidence,
+        )
         return result
 
     def _classify_with_ai(
@@ -233,15 +302,82 @@ class DocumentClassifierService:
         source_url: Optional[str],
         filename: Optional[str],
     ) -> ClassificationResult:
-        """Use OpenAI to classify the document."""
-        client = self._get_openai_client()
-        if not client:
-            raise RuntimeError("OpenAI client not available")
+        """Classify a document using LangChain with_structured_output.
 
-        # Truncate text to avoid token limits (approx 4000 chars = 1000 tokens)
-        truncated_text = text[:8000] if len(text) > 8000 else text
+        with_structured_output binds a Pydantic schema to the model using
+        OpenAI's native JSON schema enforcement. The model cannot return
+        invalid field values — no manual JSON parsing or validation needed.
+        """
+        llm = self._get_langchain_client()
+        if not llm:
+            raise RuntimeError("LangChain OpenAI client not available")
 
-        # Load prompts from files
+        # Pydantic schema for with_structured_output.
+        # OpenAI enforces all constraints (Literal, ge/le, Optional) at the
+        # API level so the response is always a valid instance.
+        class ClassificationSchema(BaseModel):
+            """Structured metadata extracted from a US tax document."""
+
+            title: Optional[str] = PydanticField(
+                default=None,
+                description="Document title extracted from content or derived from filename",
+            )
+            description: Optional[str] = PydanticField(
+                default=None,
+                description="Brief 1-2 sentence summary of what the document covers",
+            )
+            doc_type: Optional[Literal[
+                "form", "instructions", "publication", "schedule",
+                "regulation", "ruling", "notice", "faq", "guide", "other",
+            ]] = PydanticField(
+                default=None,
+                description="Document type — must be exactly one of the listed values",
+            )
+            authority_level: Optional[int] = PydanticField(
+                default=None,
+                ge=1,
+                le=6,
+                description=(
+                    "US tax authority level 1-6: "
+                    "1=IRC/Constitution/Tax Treaties, "
+                    "2=Treasury Regulations (CFR Title 26), "
+                    "3=IRS IRB Guidance (Rev. Ruling / Rev. Proc. / Notice / Announcement), "
+                    "4=IRS Forms / Publications / IRM / PLR / TAM, "
+                    "5=Federal Case Law or State Primary Authority (FTB/CDTFA/NY DTF/etc.), "
+                    "6=Secondary/Professional/General Web"
+                ),
+            )
+            authority_level_rationale: Optional[str] = PydanticField(
+                default=None,
+                description="Brief explanation of why this authority level was assigned",
+            )
+            tags: List[str] = PydanticField(
+                default_factory=list,
+                description="Up to 4 relevant keyword tags",
+            )
+            tax_year: Optional[int] = PydanticField(
+                default=None,
+                ge=1990,
+                le=2100,
+                description="Tax year as integer if mentioned in the document, null otherwise",
+            )
+            form_family: Optional[str] = PydanticField(
+                default=None,
+                description="Form family identifier e.g. '1040', 'SchC', 'W-2' if applicable",
+            )
+
+        # Build text window: start (12000 chars) + end (4000 chars) = ~16000 chars / ~4000 tokens.
+        # Start captures title, header, authority declaration, and opening sections.
+        # End captures conclusions, effective dates, and signatures.
+        if len(text) > 16000:
+            truncated_text = (
+                text[:12000]
+                + "\n\n...[sections omitted]...\n\n"
+                + text[-4000:]
+            )
+        else:
+            truncated_text = text
+
         system_prompt = get_classifier_system_prompt()
         user_prompt = get_classifier_user_prompt(
             document_text=truncated_text,
@@ -250,44 +386,25 @@ class DocumentClassifierService:
         )
 
         try:
-            response = client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": system_prompt,
-                    },
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
-            )
-
-            # Parse the response
-            content = response.choices[0].message.content.strip()
-
-            # Remove markdown code blocks if present
-            if content.startswith("```"):
-                content = re.sub(r"```(?:json)?\s*", "", content)
-                content = content.rstrip("`")
-
-            data = json.loads(content)
+            structured_llm = llm.with_structured_output(ClassificationSchema)
+            data: ClassificationSchema = structured_llm.invoke([
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": user_prompt},
+            ])
 
             return ClassificationResult(
-                title=data.get("title"),
-                description=data.get("description"),
-                doc_type=data.get("doc_type").lower() if data.get("doc_type") else None,
-                authority_level=data.get("authority_level"),
-                authority_level_rationale=data.get("authority_level_rationale"),
-                tags=data.get("tags", []),
-                tax_year=data.get("tax_year"),
-                form_family=data.get("form_family"),
+                title=data.title or None,
+                description=data.description or None,
+                doc_type=data.doc_type,
+                authority_level=data.authority_level,
+                authority_level_rationale=data.authority_level_rationale or None,
+                tags=data.tags,
+                tax_year=data.tax_year,
+                form_family=data.form_family or None,
             )
 
-        except json.JSONDecodeError as e:
-            raise RuntimeError(f"Failed to parse AI response as JSON: {e}")
         except Exception as e:
-            raise RuntimeError(f"OpenAI API error: {e}")
+            raise RuntimeError(f"LangChain structured output error: {e}")
 
     def _apply_rule_based_classification(
         self,
@@ -520,6 +637,6 @@ def get_document_classifier_service(use_ai: bool = True) -> DocumentClassifierSe
         DocumentClassifierService instance
     """
     global _classifier_service
-    if _classifier_service is None:
+    if _classifier_service is None or _classifier_service.use_ai != use_ai:
         _classifier_service = DocumentClassifierService(use_ai=use_ai)
     return _classifier_service

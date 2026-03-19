@@ -285,6 +285,35 @@ class SolrService:
         )
         return result.get("responseHeader", {}).get("status") == 0
 
+    async def update_chunks_by_document(self, document_id: str, updates: Dict) -> bool:
+        """Update a field on all chunks belonging to a document."""
+        # Fetch all chunk IDs for this document (paginate if needed)
+        all_ids = []
+        start = 0
+        rows = 500
+        while True:
+            docs, total = await self.get_chunks_by_document(document_id, start=start, rows=rows)
+            all_ids.extend(doc["id"] for doc in docs)
+            if start + rows >= total:
+                break
+            start += rows
+
+        if not all_ids:
+            return True
+
+        update_docs = []
+        for chunk_id in all_ids:
+            update_doc = {"id": chunk_id}
+            for key, value in updates.items():
+                if key != "id":
+                    update_doc[key] = {"set": value}
+            update_docs.append(update_doc)
+
+        url = f"{self.chunks_url}/update"
+        params = {"commit": "true", "wt": "json"}
+        result = await self._make_request("POST", url, params=params, json_data=update_docs)
+        return result.get("responseHeader", {}).get("status") == 0
+
     async def delete_chunks_by_document(self, document_id: str) -> bool:
         """Delete all chunks for a document."""
         url = f"{self.chunks_url}/update"

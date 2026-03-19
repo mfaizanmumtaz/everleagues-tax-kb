@@ -351,6 +351,12 @@ class DocumentService:
 
         await self.solr.update_document(doc_id, update_dict)
 
+        # Propagate governance state to all chunks so RAG search filters work correctly
+        await self.solr.update_chunks_by_document(
+            doc_id,
+            {"governanceState": update.governance_state.value, "updatedAt": now},
+        )
+
         return await self.get_document(doc_id)
 
     async def delete_document(self, doc_id: str) -> bool:
