@@ -70,9 +70,9 @@ class FilterParams(BaseModel):
     )
     city: Optional[str] = Field(default=None, description="Filter by city")
     tax_year: Optional[int] = Field(default=None, description="Filter by tax year")
-    # category: Optional[List[str]] = Field(
-    #     default=None, description="Filter by category"
-    # )
+    category: Optional[List[str]] = Field(
+         default=None, description="Filter by category"
+     )
     authority_level: Optional[int] = Field(
         default=None, ge=1, le=6, description="Filter by authority level (1-6)"
     )
