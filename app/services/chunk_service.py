@@ -137,7 +137,7 @@ class ChunkService:
             if chunk.governance_state
             else None,
             "isLatestForTaxYear": chunk.is_latest_for_tax_year,
-            # Vector
+            # Vectorsh 
             "vector": chunk.vector,
             # Metadata
             "paragraphNumber": chunk.paragraph_number,
