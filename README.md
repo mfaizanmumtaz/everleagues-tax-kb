@@ -1,7 +1,6 @@
-# Warning (Update is Pending)
-# EverLeagues Tax RAG System - Backend API
+# Tax Knowledge Base API
 
-A **Retrieval-Augmented Generation (RAG)** knowledge base system for tax documents. This backend ingests, classifies, indexes, and searches tax documents from multiple sources (file uploads, web scraping, and external API feeds). It uses hybrid search combining BM25 lexical matching, vector semantic search, and authority-level weighting to deliver accurate, citation-backed answers to tax-related questions.
+A FastAPI-powered RESTful backend for managing a **Tax Knowledge Base** system. It supports hybrid RAG (Retrieval-Augmented Generation) search over tax documents, document ingestion via file upload / web scraping / external API push, governance workflows, and a full admin dashboard, all backed by PostgreSQL, Apache Solr, Azure Blob Storage, and OpenAI embeddings.
 
 ---
 
@@ -9,65 +8,19 @@ A **Retrieval-Augmented Generation (RAG)** knowledge base system for tax documen
 
 | Layer | Technology |
 |---|---|
-| **API Framework** | FastAPI (Python 3.12+) |
-| **Search Engine** | Apache Solr 9 (BM25 + Dense Vectors) |
-| **Relational DB** | PostgreSQL (via SQLAlchemy async + asyncpg) |
-| **Blob Storage** | Azure Blob Storage |
-| **AI / Embeddings** | OpenAI (`text-embedding-3-small`, `gpt-4o-mini`) |
-| **File Parsing** | pdfplumber, PyMuPDF, python-docx, BeautifulSoup |
-| **Task Runner** | FastAPI BackgroundTasks |
-| **Package Manager** | uv |
-
----
-
-## Architecture Diagram
-
-```
-+-------------------+          +-----------------------------------------+
-|                   |   HTTP   |            FastAPI Backend               |
-|   Frontend App    +--------->+                                         |
-|   (Angular)       |          |  +----------+  +---------------------+  |
-|                   |<---------+  | Routers  |  | Background Tasks    |  |
-+-------------------+   JSON   |  +----+-----+  | - Scraping          |  |
-                               |       |        | - File Processing   |  |
-                               |       v        | - Chunking/Embedding|  |
-                               |  +----+-----+  +----------+----------+  |
-                               |  | Services |             |             |
-                               |  +----+-----+             |             |
-                               +-------|-------------------|-----------  +
-                                       |                   |
-                    +------------------+|+------------------+
-                    |                   |                   |
-              +-----v------+    +------v------+    +-------v--------+
-              |  Solr 9     |    | PostgreSQL  |    | Azure Blob     |
-              |             |    |             |    | Storage        |
-              | tax_documents|   | scrape_urls |    |                |
-              | tax_chunks  |    | scrape_jobs |    | raw-documents  |
-              | (vectors)   |    | doc_registry|    | uploads        |
-              |             |    | audit_logs  |    | api-pushed     |
-              +-------------+    +-------------+    +----------------+
-                    |
-              +-----v------+
-              |  OpenAI    |
-              |  API       |
-              | - Embed    |
-              | - LLM      |
-              +------------+
-```
-
-### Request Flow
-
-```
-1. Frontend sends HTTP request to /api/...
-2. FastAPI router validates request (Pydantic models)
-3. Router calls the appropriate service layer
-4. Service interacts with:
-   - Solr 9       --> full-text search, vector search, document/chunk CRUD
-   - PostgreSQL   --> URL management, job tracking, audit logs, registry
-   - Azure Blob   --> file storage (upload, download, delete)
-   - OpenAI       --> generate embeddings & LLM answers
-5. Response is serialized via Pydantic and returned as JSON
-```
+| **Framework** | FastAPI 0.109+ |
+| **Language** | Python 3.12+ |
+| **Database (relational)** | PostgreSQL via SQLAlchemy 2.0 (async, asyncpg) |
+| **Search engine** | Apache Solr (BM25 + vector) |
+| **Blob storage** | Azure Blob Storage |
+| **Task queue** | Celery 5.6+ with Redis broker |
+| **Embeddings / LLM** | OpenAI (`text-embedding-3-small`, `gpt-4o-mini`) |
+| **PDF / Doc parsing** | pdfplumber, PyMuPDF, python-docx, Unstructured |
+| **Text splitting** | LangChain text-splitters, tiktoken |
+| **Web scraping** | httpx, BeautifulSoup4, lxml |
+| **Migrations** | Alembic |
+| **Validation** | Pydantic v2, pydantic-settings |
+| **Server** | Uvicorn (ASGI) |
 
 ---
 
@@ -75,57 +28,112 @@ A **Retrieval-Augmented Generation (RAG)** knowledge base system for tax documen
 
 ### Prerequisites
 
-| Tool | Version |
+| Requirement | Version |
 |---|---|
 | Python | >= 3.12 |
-| PostgreSQL | >= 14 |
-| Apache Solr | 9.x |
-| Azure Blob Storage | (or Azurite for local dev) |
-| OpenAI API Key | Required for embeddings & LLM |
-| uv (package manager) | Latest |
+| PostgreSQL | 14+ recommended |
+| Apache Solr | 9.x (collections: `tax_documents`, `tax_chunks`) |
+| Redis | 6+ (for Celery broker/backend) |
+| Azure Blob Storage | An active storage account (optional for local dev) |
+| OpenAI API key | Required for embeddings and document classification |
 
 ### Installation
 
 ```bash
-# 1. Clone the repository
+# Clone the repository
 git clone <repo-url>
 cd everleagues-tax-kb
 
-# 2. Install dependencies with uv
+# Create and activate a virtual environment
+python -m venv .venv
+# Windows
+.venv\Scripts\activate
+# macOS / Linux
+source .venv/bin/activate
+
+# Install dependencies (using uv or pip)
+pip install -e .
+# or
 uv sync
-
-# 3. Copy and configure environment variables
-cp .env.example .env   # or create .env manually (see Environment Variables section)
-
-# 4. Ensure Solr collections exist
-#    Create two collections: tax_documents and tax_chunks
-#    (See Solr Configuration section below)
-
-# 5. Run the development server
-uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-### Running the Server
+### Environment Variables
 
-PostgreSQL tables are created automatically on startup if they do not exist.
+Create a `.env` file in the project root. All variables are loaded via `pydantic-settings` (case-insensitive).
+
+| Variable | Type | Default | Description |
+|---|---|---|---|
+| `DATABASE_URL` | string | `postgresql://taxkb_user:password@localhost:5432/tax_kb` | PostgreSQL connection URL |
+| `DATABASE_ECHO` | bool | `false` | Log all SQL queries |
+| `DATABASE_POOL_SIZE` | int | `10` | Connection pool size |
+| `DATABASE_MAX_OVERFLOW` | int | `20` | Max overflow connections beyond pool size |
+| `SOLR_BASE_URL` | string | `http://localhost:8983/solr` | Solr base URL |
+| `SOLR_USERNAME` | string | `null` | Solr basic-auth username |
+| `SOLR_PASSWORD` | string | `null` | Solr basic-auth password |
+| `SOLR_DOCUMENTS_COLLECTION` | string | `tax_documents` | Solr collection for documents |
+| `SOLR_CHUNKS_COLLECTION` | string | `tax_chunks` | Solr collection for chunks |
+| `AZURE_STORAGE_CONNECTION_STRING` | string | `null` | Azure Blob Storage connection string |
+| `AZURE_STORAGE_ACCOUNT_NAME` | string | `null` | Azure storage account name |
+| `AZURE_STORAGE_ACCOUNT_KEY` | string | `null` | Azure storage account key |
+| `AZURE_CONTAINER_RAW` | string | `raw-documents` | Container for raw uploaded files |
+| `AZURE_CONTAINER_PROCESSED` | string | `processed-documents` | Container for processed files |
+| `AZURE_CONTAINER_UPLOADS` | string | `uploads` | Container for direct uploads |
+| `AZURE_CONTAINER_API_PUSHED` | string | `api-pushed` | Container for API-pushed files |
+| `OPENAI_API_KEY` | string | `null` | OpenAI API key for embeddings and classification |
+| `EMBEDDING_MODEL` | string | `text-embedding-3-small` | OpenAI embedding model name |
+| `EMBEDDING_DIMENSION` | int | `1536` | Embedding vector dimension |
+| `CLASSIFIER_LLM_MODEL` | string | `gpt-4o-mini` | LLM model for document classification |
+| `CLASSIFIER_LLM_TEMPERATURE` | float | `0.1` | Classification LLM temperature |
+| `CLASSIFIER_LLM_MAX_TOKENS` | int | `600` | Classification LLM max tokens |
+| `BM25_WEIGHT` | float | `0.3` | Hybrid search BM25 weight (alpha) |
+| `VECTOR_WEIGHT` | float | `0.5` | Hybrid search vector weight (beta) |
+| `AUTHORITY_WEIGHT` | float | `0.4` | Hybrid search authority weight (gamma) |
+| `API_HOST` | string | `0.0.0.0` | Uvicorn bind host |
+| `API_PORT` | int | `8001` | Uvicorn bind port |
+| `API_PREFIX` | string | `/api` | Global API route prefix |
+| `DEBUG` | bool | `false` | Debug mode |
+| `CORS_ORIGINS` | list[string] | `["http://localhost:8001", ...]` | Allowed CORS origins (JSON array) |
+| `CORS_ALLOW_CREDENTIALS` | bool | `true` | CORS allow credentials |
+| `CORS_ALLOW_METHODS` | list[string] | `["*"]` | CORS allowed methods |
+| `CORS_ALLOW_HEADERS` | list[string] | `["*"]` | CORS allowed headers |
+| `DEFAULT_PAGE_SIZE` | int | `20` | Default pagination page size |
+| `MAX_PAGE_SIZE` | int | `100` | Maximum pagination page size |
+| `SCRAPER_DEFAULT_DELAY` | float | `2.0` | Default delay between scrape requests (seconds) |
+| `SCRAPER_DEFAULT_RPM` | int | `30` | Default max requests per minute |
+| `SCRAPER_DEFAULT_TIMEOUT` | int | `30` | Scraper request timeout (seconds) |
+| `SCRAPER_MAX_FILES_PER_SESSION` | int | `10000` | Max files per scrape session |
+| `MAX_UPLOAD_SIZE_MB` | int | `50` | Maximum file upload size in MB |
+| `ALLOWED_FILE_EXTENSIONS` | list[string] | `[".pdf", ".doc", ".docx", ".txt", ".xml", ".html", ".htm"]` | Allowed upload extensions |
+| `PROCESS_UPLOADS_SYNC` | bool | `true` | Process uploads synchronously (false = Celery background) |
+| `CELERY_BROKER_URL` | string | `redis://localhost:6379/0` | Celery broker URL |
+| `CELERY_RESULT_BACKEND` | string | `redis://localhost:6379/1` | Celery result backend URL |
+| `WORKER_CONCURRENCY` | int | `4` | Celery worker concurrency |
+| `WORKER_MAX_RETRIES` | int | `3` | Max task retries |
+| `WORKER_RETRY_DELAY` | int | `60` | Retry delay in seconds |
+| `SCRAPE_TASK_SOFT_TIME_LIMIT` | int | `3600` | Celery soft time limit for scrape tasks (seconds) |
+| `SCRAPE_TASK_TIME_LIMIT` | int | `3660` | Celery hard time limit for scrape tasks (seconds) |
+| `NEO4J_URI` | string | `null` | Neo4j connection URI (optional) |
+| `NEO4J_USERNAME` | string | `null` | Neo4j username (optional) |
+| `NEO4J_PASSWORD` | string | `null` | Neo4j password (optional) |
+| `NEO4J_DATABASE` | string | `neo4j` | Neo4j database name |
+| `ONTOLOGY_OWL_URLS` | list[string] | `[]` | OWL/RDF ontology URLs for import |
+
+### Running the Project
 
 ```bash
-# Option A: Using uvicorn directly
-uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
+# Start the API server (development)
+python main.py
+# or
+uvicorn main:app --host 0.0.0.0 --port 8001 --reload
 
-# Option B: Using the main module
-uv run python main.py
+# Start a Celery worker (for background scraping/processing)
+celery -A app.worker.celery_app worker --loglevel=info --concurrency=4
 ```
 
-Once running, the API is available at:
-
-| Resource | URL |
-|---|---|
-| **Base URL** | `http://localhost:8000` |
-| **API Prefix** | `http://localhost:8000/api` |
-| **Swagger Docs** | `http://localhost:8000/api/docs` |
-| **ReDoc** | `http://localhost:8000/api/redoc` |
-| **OpenAPI JSON** | `http://localhost:8000/api/openapi.json` |
+Once running, interactive API docs are available at:
+- **Swagger UI**: `http://localhost:8001/api/docs`
+- **ReDoc**: `http://localhost:8001/api/redoc`
+- **OpenAPI JSON**: `http://localhost:8001/api/openapi.json`
 
 ---
 
@@ -133,109 +141,121 @@ Once running, the API is available at:
 
 ```
 everleagues-tax-kb/
-|-- main.py                        # FastAPI app entry point, lifespan, CORS, router registration, DB init
-|-- pyproject.toml                 # Python project config & dependencies
-|-- uv.lock                       # Dependency lock file
-|-- .env                           # Environment variables (not committed)
+|-- main.py                          # FastAPI app entry point, lifespan, root routes
+|-- pyproject.toml                   # Python project metadata and dependencies
+|-- .env                             # Environment variables (not committed)
 |
 |-- app/
-    |-- __init__.py
-    |-- dependencies.py            # FastAPI dependency injection (shared service instances)
-    |
-    |-- config/
-    |   |-- settings.py            # Pydantic BaseSettings - all env vars with defaults
-    |   |-- jurisdiction_config.py # US states, cities, tax categories loader
-    |   |-- jurisdictions.json     # JSON data: states, cities, doc types, tax types
-    |
-    |-- database/
-    |   |-- base.py                # SQLAlchemy Base, UUIDMixin, TimestampMixin
-    |   |-- connection.py          # Async engine, session factory, get_db dependency
-    |
-    |-- db_models/                 # SQLAlchemy ORM models (PostgreSQL tables)
-    |   |-- scrape_url.py          # ScrapeUrl - web scraping source URLs
-    |   |-- scrape_job.py          # ScrapeJob, ScrapeJobLog - scraping job tracking
-    |   |-- document_registry.py   # DocumentRegistry, DocumentBlob - unified doc tracking
-    |   |-- governance.py          # GovernanceTransition - state change history
-    |   |-- audit.py               # AuditLog - system action audit trail
-    |   |-- discovered_page.py     # DiscoveredPage - pre-ingestion page review
-    |   |-- path_rule.py           # PathRule - URL path block/allow rules
-    |   |-- api_source.py          # ApiSource - external API source configs
-    |   |-- system.py              # SystemSetting - key-value system config
-    |
-    |-- models/                    # Pydantic models (API request/response schemas)
-    |   |-- common.py              # GovernanceState, FilterParams, PaginatedResponse
-    |   |-- document.py            # DocumentCreate, DocumentUpdate, DocumentResponse
-    |   |-- search.py              # SearchRequest, SearchResponse, RetrievedChunk
-    |   |-- upload.py              # FileUploadMetadata, FileUploadResponse
-    |   |-- chunk.py               # Chunk-related models
-    |
-    |-- routers/                   # FastAPI route handlers (controllers)
-    |   |-- search.py              # RAG search endpoint
-    |   |-- documents.py           # Document CRUD + governance
-    |   |-- dashboard.py           # Stats, health, alerts, freshness, scalability
-    |   |-- governance.py          # Governance audit logs
-    |   |-- urls.py                # URL/scraping source management + scrape triggers
-    |   |-- discovery.py           # Page discovery, approval, path rules
-    |   |-- audit.py               # Audit log queries
-    |   |-- upload.py              # File upload & processing
-    |   |-- api_push.py            # External API file push & management
-    |   |-- api_sources.py         # API source configuration CRUD
-    |
-    |-- services/                  # Business logic layer
-    |   |-- solr_service.py        # Async Solr HTTP client (httpx)
-    |   |-- search_service.py      # Hybrid RAG search (BM25 + vector + authority)
-    |   |-- document_service.py    # Document CRUD, chunking, governance
-    |   |-- chunk_service.py       # Chunk management
-    |   |-- embedding_service.py   # OpenAI embedding generation
-    |   |-- llm_service.py         # LLM for classification & answer generation
-    |   |-- document_classifier_service.py  # AI document classification
-    |   |-- document_registry_service.py    # Registry CRUD operations
-    |   |-- blob_storage_service.py         # Azure Blob upload/download/delete
-    |   |-- audit_log_service.py            # Audit log writing & querying
-    |   |-- scrape_service.py               # Web scraping pipeline
-    |   |-- scrape_job_service.py           # Scrape job lifecycle
-    |   |-- url_db_service.py               # URL database operations
-    |   |-- discovery_service.py            # Website crawler for page discovery
-    |   |-- discovered_page_service.py      # Page approval/rejection
-    |   |-- path_rule_service.py            # Path rule management
-    |   |-- api_source_service.py           # API source CRUD
-    |   |-- text_chunker.py                 # Text splitting into chunks
-    |   |-- file_parser/
-    |       |-- service.py          # Main file parsing orchestrator
-    |       |-- loaders.py          # PDF, DOCX, HTML, TXT loaders
-    |       |-- result.py           # Parse result model
-    |       |-- exceptions.py       # Parser-specific exceptions
-    |
-    |-- prompts/
-    |   |-- __init__.py             # LLM prompt templates
-    |
-    |-- utils/
-        |-- validators.py           # Validation utilities
+|   |-- __init__.py
+|   |-- dependencies.py              # FastAPI dependency injection (DB session, services)
+|   |
+|   |-- config/
+|   |   |-- __init__.py
+|   |   |-- settings.py              # Pydantic-settings configuration class
+|   |   |-- jurisdiction_config.py   # US state/city validation data
+|   |   |-- jurisdictions.json       # Jurisdiction lookup dataset
+|   |
+|   |-- database/
+|   |   |-- __init__.py
+|   |   |-- base.py                  # SQLAlchemy Base, UUID and Timestamp mixins
+|   |   |-- connection.py            # Async engine, session factory, init_db()
+|   |
+|   |-- db_models/                   # SQLAlchemy ORM models (PostgreSQL)
+|   |   |-- __init__.py
+|   |   |-- document_registry.py     # DocumentRegistry, DocumentBlob
+|   |   |-- scrape_url.py            # ScrapeUrl
+|   |   |-- scrape_job.py            # ScrapeJob, ScrapeJobLog
+|   |   |-- path_rule.py             # PathRule
+|   |   |-- discovered_page.py       # DiscoveredPage
+|   |   |-- api_source.py            # ApiSource
+|   |   |-- governance.py            # GovernanceTransition
+|   |   |-- audit.py                 # AuditLog
+|   |   |-- system.py                # SystemSetting
+|   |
+|   |-- models/                      # Pydantic request/response schemas
+|   |   |-- __init__.py
+|   |   |-- common.py                # Shared enums, FilterParams, pagination
+|   |   |-- document.py              # Document CRUD schemas
+|   |   |-- search.py                # RAG search request/response
+|   |   |-- urls.py                  # URL management schemas
+|   |   |-- dashboard.py             # Dashboard metrics schemas
+|   |   |-- governance.py            # Governance log schemas
+|   |   |-- audit.py                 # Audit log schemas
+|   |   |-- upload.py                # File upload schemas
+|   |   |-- discovery.py             # Page discovery / path rule schemas
+|   |   |-- api_sources.py           # External API source schemas
+|   |   |-- chunk.py                 # Chunk schemas
+|   |
+|   |-- routers/                     # FastAPI route handlers
+|   |   |-- __init__.py
+|   |   |-- search.py                # /api/search/*
+|   |   |-- documents.py             # /api/documents/*
+|   |   |-- dashboard.py             # /api/dashboard/*
+|   |   |-- governance.py            # /api/governance/*
+|   |   |-- urls.py                  # /api/urls/*
+|   |   |-- discovery.py             # /api/urls/{id}/discover/*, path-rules
+|   |   |-- audit.py                 # /api/audit/*
+|   |   |-- upload.py                # /api/upload
+|   |   |-- api_push.py              # /api/push/*
+|   |   |-- api_sources.py           # /api/sources/*
+|   |
+|   |-- services/                    # Business logic layer
+|   |   |-- __init__.py
+|   |   |-- solr_service.py          # Solr HTTP client
+|   |   |-- search_service.py        # Hybrid RAG search logic
+|   |   |-- document_service.py      # Document CRUD via Solr
+|   |   |-- chunk_service.py         # Chunk management
+|   |   |-- text_chunker.py          # Text splitting and chunking
+|   |   |-- embedding_service.py     # OpenAI embedding generation
+|   |   |-- document_classifier_service.py  # LLM-based metadata extraction
+|   |   |-- ingestion_service.py     # End-to-end document ingestion pipeline
+|   |   |-- blob_storage_service.py  # Azure Blob Storage operations
+|   |   |-- url_db_service.py        # Scrape URL CRUD (PostgreSQL)
+|   |   |-- scrape_service.py        # Web scraping logic
+|   |   |-- scrape_job_service.py    # Scrape job tracking
+|   |   |-- discovery_service.py     # Site discovery / crawling
+|   |   |-- discovered_page_service.py  # Discovered page management
+|   |   |-- path_rule_service.py     # Path include/exclude rules
+|   |   |-- document_registry_service.py  # Document registry (PostgreSQL)
+|   |   |-- api_source_service.py    # External API source management
+|   |   |-- audit_log_service.py     # Audit log writes
+|   |   |-- file_parser/             # File parsing subsystem
+|   |   |   |-- __init__.py
+|   |   |   |-- service.py           # Parser orchestrator
+|   |   |   |-- loaders.py           # PDF, DOCX, HTML, TXT loaders
+|   |   |   |-- result.py            # Parse result data class
+|   |   |   |-- exceptions.py        # Parser-specific exceptions
+|   |
+|   |-- worker/                      # Celery background tasks
+|   |   |-- celery_app.py            # Celery app configuration
+|   |   |-- tasks.py                 # Task definitions (scrape, process_document)
+|   |
+|   |-- utils/
+|   |   |-- __init__.py
+|   |   |-- validators.py            # URL, authority level, and query validators
+|   |
+|   |-- prompts/
+|       |-- __init__.py              # LLM prompt templates
 ```
 
 ---
 
 ## API Documentation
 
-**Base URL:** `http://localhost:8000`
-**API Prefix:** `/api` (all endpoints below are prefixed with `/api`)
+**Base URL**: `http://localhost:8001`
+**API Prefix**: `/api` (all grouped endpoints live under this prefix)
 
-> Interactive docs are available at `/api/docs` (Swagger UI) and `/api/redoc` (ReDoc).
-
----
-
-### Health & Status Endpoints
+### Root
 
 ---
 
-#### Root
+### `GET /`
 
-- **Method:** `GET`
-- **URL:** `/`
-- **Description:** Returns basic API information and links to documentation.
+**Description:** Returns API identity and documentation links.
 
-**Response:**
+**Auth required:** No
 
+**Success Response (200):**
 ```json
 {
   "name": "Tax Knowledge Base API",
@@ -246,19 +266,15 @@ everleagues-tax-kb/
 }
 ```
 
-**Status Codes:**
-- `200` - Success
-
 ---
 
-#### Health Check
+### `GET /health`
 
-- **Method:** `GET`
-- **URL:** `/health`
-- **Description:** Checks the health of the system by verifying connectivity to both Solr collections. Returns `healthy`, `degraded`, or `unhealthy`.
+**Description:** Liveness check. Reports Solr collection health.
 
-**Response (healthy):**
+**Auth required:** No
 
+**Success Response (200):**
 ```json
 {
   "status": "healthy",
@@ -268,8 +284,7 @@ everleagues-tax-kb/
 }
 ```
 
-**Response (unhealthy):**
-
+**Degraded Response (200):**
 ```json
 {
   "status": "unhealthy",
@@ -280,235 +295,139 @@ everleagues-tax-kb/
 }
 ```
 
-**Status Codes:**
-- `200` - Always returns 200 (check `status` field for actual health)
+---
+
+### Search
 
 ---
 
-### Search & RAG Endpoints
+### `POST /api/search/rag`
 
----
+**Description:** Hybrid RAG search combining BM25 keyword matching, vector similarity, and authority-level weighting. Returns ranked chunks and source documents.
 
-#### RAG Search
-
-- **Method:** `POST`
-- **URL:** `/api/search/rag`
-- **Description:** Performs a Retrieval-Augmented Generation search. Combines BM25 lexical search, vector semantic search, and authority-level weighting to find the most relevant tax document chunks, then optionally generates an LLM answer based on the retrieved context.
+**Auth required:** No
 
 **Request Body:**
 
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `query` | string | Yes | Search query text (min length 1) |
+| `filters` | object | No | Filter parameters (see FilterParams below) |
+| `filters.jurisdiction` | string | No | `federal`, `state`, or `local` |
+| `filters.state` | string | No | US state code (e.g. `CA`, `NY`) |
+| `filters.city` | string | No | City name |
+| `filters.tax_year` | int | No | Tax year |
+| `filters.authority_level` | int | No | Authority level (1-6) |
+| `filters.governance_state` | string | No | `Draft`, `Under Review`, `Published`, `Deprecated`, `Archived` |
+| `filters.doc_type` | string | No | Document type filter |
+| `filters.source_domain` | string | No | Source domain filter |
+| `filters.needs_human_review` | bool | No | Filter by review status |
+| `search_quality_controls` | object | No | Tuning parameters |
+| `search_quality_controls.retrieval_mode` | string | No | `hybrid` (default), `vector`, or `bm25` |
+| `search_quality_controls.authority_weight_control` | float | No | Authority weight 0.0-1.0 (default 0.5) |
+| `search_quality_controls.semantic_lexical_balance` | float | No | Semantic vs lexical balance 0.0-1.0 (default 0.5) |
+| `search_quality_controls.top_k` | int | No | Number of results 1-100 (default 10) |
+
+**Example Request:**
 ```json
 {
-  "query": "What is the standard deduction for 2024?",
+  "query": "capital gains tax rate for 2024",
   "filters": {
     "jurisdiction": "federal",
-    "state": null,
-    "city": null,
-    "tax_year": 2024,
-    "category": null,
-    "authority_level": null,
-    "governance_state": null,
-    "doc_type": null,
-    "source_domain": null,
-    "needs_human_review": null,
-    "is_latest_for_tax_year": true
+    "tax_year": 2024
   },
   "search_quality_controls": {
     "retrieval_mode": "hybrid",
-    "authority_weight_control": 0.5,
-    "semantic_lexical_balance": 0.5,
     "top_k": 10
-  },
-  "generate_answer": true
-}
-```
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `query` | string | Yes | The search query text (min 1 character) |
-| `filters` | object | No | Optional filters to narrow results (see FilterParams below) |
-| `search_quality_controls` | object | No | Fine-tune search behavior |
-| `generate_answer` | boolean | No | Whether to generate an LLM answer (default: `true`) |
-
-**FilterParams fields:**
-
-| Field | Type | Description |
-|---|---|---|
-| `jurisdiction` | string | `"federal"`, `"state"`, or `"local"` |
-| `state` | string | 2-letter US state code (e.g., `"CA"`, `"NY"`) -- required if jurisdiction is `"state"` or `"local"` |
-| `city` | string | City name -- required if jurisdiction is `"local"` |
-| `tax_year` | integer | Filter by tax year (e.g., `2024`) |
-| `category` | string[] | Filter by category |
-| `authority_level` | integer | 1-6 (1 = highest authority like IRC, 6 = lowest like blog posts) |
-| `governance_state` | string | `"Draft"`, `"Under Review"`, `"Published"`, `"Deprecated"`, `"Archived"` |
-| `doc_type` | string | Document type filter |
-| `source_domain` | string | Filter by source domain |
-| `needs_human_review` | boolean | Filter by review status |
-| `is_latest_for_tax_year` | boolean | Only return latest version for a tax year |
-
-**SearchQualityControls fields:**
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `retrieval_mode` | string | `"hybrid"` | `"hybrid"`, `"vector"`, or `"bm25"` |
-| `authority_weight_control` | float | `0.5` | Weight for authority level (0.0 - 1.0) |
-| `semantic_lexical_balance` | float | `0.5` | 0 = pure lexical, 1 = pure semantic |
-| `top_k` | integer | `10` | Number of results to return (1 - 100) |
-
-**Success Response (200):**
-
-```json
-{
-  "query": "What is the standard deduction for 2024?",
-  "retrieved_chunks": [
-    {
-      "id": "chunk-uuid-1",
-      "chunk_id": "doc-uuid_chunk_0",
-      "document_name": "irs-publication-501.pdf",
-      "content": "For 2024, the standard deduction amounts are: $14,600 for single filers...",
-      "relevance_score": 0.92,
-      "authority_level": 1,
-      "priority_rank": 1,
-      "is_preferred": true,
-      "tax_year": 2024,
-      "jurisdiction": "federal",
-      "state": null,
-      "source_url": "https://www.irs.gov/pub/irs-pdf/p501.pdf",
-      "source_domain": "irs.gov",
-      "paragraph_number": 3,
-      "file_version": null,
-      "effective_from": "2024-01-01T00:00:00Z",
-      "conflict_resolution_reason": "higher_authority"
-    }
-  ],
-  "source_documents": [
-    {
-      "id": "doc-uuid-1",
-      "title": "IRS Publication 501 - Standard Deduction",
-      "category": "Federal",
-      "jurisdiction": "federal",
-      "url": "https://www.irs.gov/pub/irs-pdf/p501.pdf",
-      "excerpt": "For 2024, the standard deduction amounts are...",
-      "authority_level": 1,
-      "priority_rank": 1,
-      "is_preferred": true,
-      "tax_year": 2024,
-      "state": null,
-      "effective_from": "2024-01-01T00:00:00Z",
-      "conflict_resolution_reason": "higher_authority",
-      "chunks": []
-    }
-  ],
-  "total_chunks": 15,
-  "search_time_ms": 245.3,
-  "retrieval_mode": "hybrid",
-  "generated_answer": "For the 2024 tax year, the standard deduction is $14,600 for single filers and married individuals filing separately, $29,200 for married couples filing jointly, and $21,900 for heads of household. [Source: IRS Publication 501]",
-  "score_weights": {
-    "alpha": 0.3,
-    "beta": 0.5,
-    "gamma": 0.4
   }
 }
 ```
 
-**Error Response (500):**
-
+**Success Response (200):**
 ```json
 {
-  "detail": "Search service error: Solr connection refused"
+  "query": "capital gains tax rate for 2024",
+  "retrieved_chunks": [
+    {
+      "id": "chunk-uuid",
+      "chunk_id": "doc-uuid_chunk_0",
+      "document_name": "irs-pub-544.pdf",
+      "content": "The tax rate on most net capital gain is no higher than 15%...",
+      "relevance_score": 0.89,
+      "authority_level": 1,
+      "priority_rank": 1,
+      "is_preferred": true,
+      "tax_year": 2024,
+      "jurisdiction": "federal",
+      "source_url": "https://www.irs.gov/pub544",
+      "source_domain": "irs.gov"
+    }
+  ],
+  "source_documents": [
+    {
+      "id": "doc-uuid",
+      "title": "IRS Publication 544",
+      "jurisdiction": "federal",
+      "authority_level": 1,
+      "tax_year": 2024,
+      "is_preferred": true,
+      "chunks": []
+    }
+  ],
+  "total_chunks": 1,
+  "search_time_ms": 142.5,
+  "retrieval_mode": "hybrid",
+  "score_weights": { "alpha": 0.3, "beta": 0.5, "gamma": 0.4 }
 }
 ```
 
-**Status Codes:**
-- `200` - Search completed successfully
-- `422` - Validation error (invalid query or filter parameters)
-- `500` - Server error
+| Status | Message |
+|---|---|
+| 500 | Internal search error |
 
 ---
 
-### Document Management Endpoints
+### Documents
 
 ---
 
-#### List Documents
+### `GET /api/documents`
 
-- **Method:** `GET`
-- **URL:** `/api/documents`
-- **Description:** Returns a paginated list of documents with optional filtering and sorting. All filters are optional.
+**Description:** List documents from Solr with filtering and pagination.
+
+**Auth required:** No
 
 **Query Parameters:**
 
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `query` | string | No | `*:*` | Solr search query |
-| `jurisdiction` | string | No | - | `"federal"`, `"state"`, or `"local"` |
-| `state` | string | No | - | 2-letter state code |
-| `city` | string | No | - | City name |
-| `tax_year` | integer | No | - | Tax year |
-| `category` | string[] | No | - | Filter by category (repeatable) |
-| `authority_level` | integer | No | - | 1-6 |
-| `governance_state` | string | No | - | Governance state filter |
-| `doc_type` | string | No | - | Document type |
-| `needs_human_review` | boolean | No | - | Review status filter |
-| `page` | integer | No | `1` | Page number (>= 1) |
-| `limit` | integer | No | `20` | Items per page (1-100) |
-| `sort` | string | No | `"uploadedDate desc"` | Sort field and direction |
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `query` | string | No | Solr query (default `*:*`) |
+| `jurisdiction` | string | No | Jurisdiction filter |
+| `state` | string | No | State code filter |
+| `city` | string | No | City filter |
+| `tax_year` | int | No | Tax year filter |
+| `authority_level` | int | No | Authority level 1-6 |
+| `governance_state` | string | No | Governance state filter |
+| `doc_type` | string | No | Document type filter |
+| `needs_human_review` | bool | No | Review status filter |
+| `page` | int | No | Page number (default 1) |
+| `limit` | int | No | Items per page 1-100 (default 20) |
+| `sort` | string | No | Sort field (default `uploadedDate desc`) |
 
 **Success Response (200):**
-
 ```json
 {
   "items": [
     {
-      "id": "abc-123-def",
-      "name": "irs-publication-501.pdf",
-      "title": "IRS Publication 501 - Standard Deduction",
-      "description": "Guidance on standard deduction amounts for 2024",
-      "source_url": "https://www.irs.gov/pub/irs-pdf/p501.pdf",
-      "source_domain": "irs.gov",
-      "tags": ["standard-deduction", "federal"],
-      "category": "Federal",
-      "doc_type": "publication",
-      "tax_year": 2024,
-      "tax_type": "income",
+      "id": "doc-uuid",
+      "name": "tax-form-1040.pdf",
+      "title": "Form 1040 - Individual Income Tax Return",
       "jurisdiction": "federal",
-      "state": null,
-      "city": null,
-      "authority_level": 1,
-      "authority_level_rationale": "Official IRS publication",
-      "effective_from": "2024-01-01T00:00:00Z",
-      "effective_to": null,
-      "applies_to_tax_years": [2024],
-      "applies_to_jurisdictions": ["federal"],
-      "form_family": null,
-      "size": "1024000",
-      "knowledge_base_id": "default",
-      "sync_status": "synced",
-      "index_status": "indexed",
-      "sync_error": null,
-      "index_error": null,
       "governance_state": "Published",
       "chunk_count": 45,
-      "tokens_indexed": 12500,
-      "embedding_model": "text-embedding-3-small",
-      "last_indexed_at": "2024-12-01T10:30:00Z",
-      "needs_human_review": false,
-      "review_reason": null,
-      "reviewed_at": null,
-      "reviewed_by": null,
-      "parsing_quality": 0.95,
-      "classification_confidence": 0.88,
-      "version": 1,
-      "superseded_by": null,
-      "is_latest_for_tax_year": true,
-      "has_newer_version": false,
-      "uploaded_date": "2024-11-15T08:00:00Z",
-      "last_synced": "2024-12-01T10:30:00Z",
-      "created_at": "2024-11-15T08:00:00Z",
-      "updated_at": "2024-12-01T10:30:00Z",
-      "ingestion_history": [],
-      "error_history": [],
-      "governance_history": []
+      "sync_status": "synced",
+      "index_status": "indexed",
+      "uploaded_date": "2024-12-01T10:30:00Z"
     }
   ],
   "total": 150,
@@ -520,2319 +439,1335 @@ everleagues-tax-kb/
 }
 ```
 
-**Status Codes:**
-- `200` - Success
-- `422` - Invalid filter parameters
-- `500` - Server error
-
 ---
 
-#### Get Document by ID
+### `GET /api/documents/{document_id}`
 
-- **Method:** `GET`
-- **URL:** `/api/documents/{document_id}`
-- **Description:** Returns full details for a single document including governance history.
+**Description:** Get a single document by ID.
+
+**Auth required:** No
 
 **Path Parameters:**
 
-| Parameter | Type | Required | Description |
+| Param | Type | Required | Description |
 |---|---|---|---|
 | `document_id` | string | Yes | Document ID |
 
-**Success Response (200):** Same shape as a single item in the list response above.
+**Success Response (200):** `DocumentResponse` object.
 
-**Error Response (404):**
-
-```json
-{
-  "detail": "Document not found"
-}
-```
-
-**Status Codes:**
-- `200` - Success
-- `404` - Document not found
-- `500` - Server error
+| Status | Message |
+|---|---|
+| 404 | Document not found |
 
 ---
 
-#### Create Document
+### `POST /api/documents`
 
-- **Method:** `POST`
-- **URL:** `/api/documents`
-- **Description:** Creates a new document in Solr. This registers document metadata; it does not handle file upload (use `/api/upload` for that).
+**Description:** Create a new document in Solr.
 
-**Request Body:**
+**Auth required:** No
 
-```json
-{
-  "name": "tax-guide-2024.pdf",
-  "title": "California Sales Tax Guide 2024",
-  "description": "Comprehensive guide to California sales tax rates and rules",
-  "source_url": "https://example.com/ca-sales-tax.pdf",
-  "source_domain": "example.com",
-  "tags": ["sales-tax", "california"],
-  "category": "State",
-  "doc_type": "guide",
-  "tax_year": 2024,
-  "tax_type": "sales",
-  "jurisdiction": "state",
-  "state": "CA",
-  "city": null,
-  "authority_level": 3,
-  "authority_level_rationale": "State tax agency publication",
-  "effective_from": "2024-01-01T00:00:00Z",
-  "effective_to": null,
-  "applies_to_tax_years": [2024, 2025],
-  "applies_to_jurisdictions": ["state"],
-  "form_family": null,
-  "size": "512000",
-  "knowledge_base_id": "default"
-}
-```
+**Request Body:** `DocumentCreate` schema -- includes all `DocumentBase` fields plus `size`, `knowledge_base_id`, and `source_type`.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `name` | string | Yes | Document filename |
 | `title` | string | No | Document title |
-| `description` | string | No | Document description |
+| `description` | string | No | Description |
 | `source_url` | string | No | Source URL |
-| `source_domain` | string | No | Source domain |
-| `tags` | string[] | No | Tags (default: `[]`) |
-| `category` | string | No | Category |
+| `tags` | string[] | No | Tags |
 | `doc_type` | string | No | Document type |
-| `tax_year` | integer | No | Tax year |
-| `tax_type` | string | No | Tax type |
-| `jurisdiction` | string | No | `"federal"`, `"state"`, or `"local"` |
-| `state` | string | No | 2-letter state code |
+| `tax_year` | int | No | Tax year |
+| `jurisdiction` | string | No | Jurisdiction level |
+| `state` | string | No | State code |
 | `city` | string | No | City name |
-| `authority_level` | integer | No | 1-6 |
-| `authority_level_rationale` | string | No | Reason for authority level |
-| `effective_from` | datetime | No | When the document takes effect |
-| `effective_to` | datetime | No | When the document expires |
-| `applies_to_tax_years` | int[] | No | Applicable tax years |
-| `applies_to_jurisdictions` | string[] | No | Applicable jurisdictions |
-| `form_family` | string | No | Form family (e.g., `"1040"`, `"SchC"`) |
+| `authority_level` | int | No | Authority level 1-6 |
 | `size` | string | No | File size |
-| `knowledge_base_id` | string | No | Knowledge base ID (default: `"default"`) |
+| `knowledge_base_id` | string | No | Knowledge base ID (default `default`) |
+| `source_type` | string | No | `upload`, `scrape`, or `api` |
 
-**Success Response (201):** Returns the created `DocumentResponse` object.
-
-**Status Codes:**
-- `201` - Created
-- `422` - Validation error
-- `500` - Server error
+**Success Response (201):** `DocumentResponse` object.
 
 ---
 
-#### Update Document
+### `PUT /api/documents/{document_id}`
 
-- **Method:** `PUT`
-- **URL:** `/api/documents/{document_id}`
-- **Description:** Updates document metadata. Only provided fields are updated (partial update).
+**Description:** Update a document. Writes an audit log entry on success.
+
+**Auth required:** No
 
 **Path Parameters:**
 
-| Parameter | Type | Required | Description |
+| Param | Type | Required | Description |
 |---|---|---|---|
 | `document_id` | string | Yes | Document ID |
 
-**Request Body:**
+**Request Body:** `DocumentUpdate` -- all fields optional.
 
-```json
-{
-  "title": "Updated Title",
-  "tags": ["updated-tag"],
-  "authority_level": 2,
-  "governance_state": null
-}
-```
+**Success Response (200):** Updated `DocumentResponse`.
 
-All fields are optional. Only include fields you want to change.
-
-**Success Response (200):** Returns the updated `DocumentResponse` object.
-
-**Error Response (404):**
-
-```json
-{
-  "detail": "Document not found"
-}
-```
-
-**Status Codes:**
-- `200` - Updated
-- `404` - Document not found
-- `422` - Validation error
-- `500` - Server error
+| Status | Message |
+|---|---|
+| 404 | Document not found |
 
 ---
 
-#### Delete Document
+### `DELETE /api/documents/{document_id}`
 
-- **Method:** `DELETE`
-- **URL:** `/api/documents/{document_id}`
-- **Description:** Deletes a document and all its chunks from Solr, and removes its entry from the PostgreSQL document registry.
+**Description:** Delete a document and all its chunks. Removes registry entry and writes audit log.
+
+**Auth required:** No
 
 **Path Parameters:**
 
-| Parameter | Type | Required | Description |
+| Param | Type | Required | Description |
 |---|---|---|---|
 | `document_id` | string | Yes | Document ID |
-
-**Success Response:** `204 No Content` (empty body)
-
-**Error Response (404):**
-
-```json
-{
-  "detail": "Document not found"
-}
-```
-
-**Status Codes:**
-- `204` - Deleted successfully (no body)
-- `404` - Document not found
-- `500` - Server error
-
----
-
-#### Get Document Chunks
-
-- **Method:** `GET`
-- **URL:** `/api/documents/{document_id}/chunks`
-- **Description:** Returns all chunks belonging to a document with pagination.
-
-**Path Parameters:**
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `document_id` | string | Yes | Document ID |
-
-**Query Parameters:**
-
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `page` | integer | No | `1` | Page number |
-| `limit` | integer | No | `100` | Items per page (1-1000) |
-
-**Success Response (200):**
-
-```json
-{
-  "items": [
-    {
-      "id": "chunk-uuid",
-      "documentId": "doc-uuid",
-      "content": "The standard deduction for single filers in 2024 is $14,600...",
-      "chunkIndex": 0,
-      "tokenCount": 256,
-      "jurisdiction": "federal",
-      "taxYear": 2024
-    }
-  ],
-  "total": 45,
-  "page": 1,
-  "limit": 100,
-  "pages": 1,
-  "has_next": false,
-  "has_prev": false
-}
-```
-
-**Status Codes:**
-- `200` - Success
-- `404` - Document not found
-- `500` - Server error
-
----
-
-#### Update Document Governance State
-
-- **Method:** `PUT`
-- **URL:** `/api/documents/{document_id}/governance`
-- **Description:** Updates a document's governance state and appends a history entry.
-
-**Path Parameters:**
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `document_id` | string | Yes | Document ID |
-
-**Request Body:**
-
-```json
-{
-  "governance_state": "Published",
-  "changed_by": "john.doe@company.com",
-  "reason": "Reviewed and approved by tax team"
-}
-```
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `governance_state` | string | Yes | One of: `"Draft"`, `"Under Review"`, `"Published"`, `"Deprecated"`, `"Archived"` |
-| `changed_by` | string | Yes | Identifier of the user making the change |
-| `reason` | string | No | Reason for the state change |
-
-**Success Response (200):** Returns the updated `DocumentResponse` with the new governance history entry appended.
-
-**Status Codes:**
-- `200` - Updated
-- `404` - Document not found
-- `500` - Server error
-
----
-
-### File Upload & Ingestion Endpoints
-
----
-
-#### Upload File
-
-- **Method:** `POST`
-- **URL:** `/api/upload`
-- **Description:** Uploads a file (PDF, DOCX, TXT, XML, HTML) and processes it through the full ingestion pipeline: blob storage, text extraction, AI classification, chunking, embedding generation, and Solr indexing. Processing happens in the background after the file is uploaded.
-
-**Request:** `multipart/form-data`
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `file` | file | Yes | The file to upload (max 50MB by default) |
-| `metadata` | string (JSON) | No | JSON string containing document metadata |
-
-**Supported file types:** `.pdf`, `.doc`, `.docx`, `.txt`, `.xml`, `.html`, `.htm`
-
-**Metadata JSON structure:**
-
-```json
-{
-  "jurisdiction": "state",
-  "state": "CA",
-  "city": null,
-  "tax_year": 2024,
-  "tax_type": "income",
-  "authority_level": 3,
-  "authority_level_rationale": "State agency guidance",
-  "knowledge_base_id": "default",
-  "tags": ["california", "income-tax"],
-  "title": "CA Income Tax Guide",
-  "description": "Guide for CA income tax filing",
-  "doc_type": "guide",
-  "effective_from": "2024-01-01T00:00:00Z",
-  "effective_to": null,
-  "applies_to_tax_years": [2024],
-  "applies_to_jurisdictions": ["state"],
-  "form_family": null
-}
-```
-
-**Metadata validation rules:**
-- `jurisdiction` is **required** (`"federal"`, `"state"`, or `"local"`)
-- If jurisdiction is `"state"` or `"local"`: `state` is **required**
-- If jurisdiction is `"local"`: `city` is also **required**
-- `state` must be a valid 2-letter US state code
-- `tax_year` must be between 1900 and 2100
-
-**cURL example:**
-
-```bash
-curl -X POST http://localhost:8000/api/upload \
-  -F "file=@/path/to/tax-document.pdf" \
-  -F 'metadata={"jurisdiction":"federal","tax_year":2024,"tags":["irs"]}'
-```
-
-**JavaScript fetch example:**
-
-```javascript
-const formData = new FormData();
-formData.append('file', fileInput.files[0]);
-formData.append('metadata', JSON.stringify({
-  jurisdiction: 'state',
-  state: 'CA',
-  tax_year: 2024,
-  tags: ['california', 'sales-tax']
-}));
-
-const response = await fetch('http://localhost:8000/api/upload', {
-  method: 'POST',
-  body: formData
-});
-```
-
-**Success Response (201):**
-
-```json
-{
-  "document_id": "pending",
-  "uploaded_file_id": null,
-  "registry_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "filename": "tax-document.pdf",
-  "file_size": 1024000,
-  "blob_path": "uploads/a1b2c3d4.pdf",
-  "blob_url": "https://storageaccount.blob.core.windows.net/uploads/a1b2c3d4.pdf",
-  "content_type": "application/pdf",
-  "status": "processing",
-  "chunks_created": 0,
-  "word_count": 0,
-  "page_count": 0,
-  "parsing_quality": 0.0,
-  "message": "File uploaded successfully. Processing in background...",
-  "document": null
-}
-```
-
-**Error Responses:**
-
-```json
-// 400 - Bad Request
-{ "detail": "Unsupported file type: .exe. Supported types: .pdf, .doc, .docx, .txt, .xml, .html, .htm" }
-
-// 400 - Empty file
-{ "detail": "File is empty" }
-
-// 413 - File too large
-{ "detail": "File exceeds maximum size of 50MB" }
-
-// 503 - Storage not configured
-{ "detail": "Azure Blob Storage is not configured" }
-```
-
-**Status Codes:**
-- `201` - File uploaded, processing started
-- `400` - Bad request (invalid file type, empty file, bad metadata JSON)
-- `413` - File too large
-- `422` - Metadata validation failed
-- `503` - Azure Blob Storage not configured
-- `500` - Server error
-
----
-
-### API Push Endpoints
-
-These endpoints are used by an external API download service to push files into the system.
-
----
-
-#### Push File
-
-- **Method:** `POST`
-- **URL:** `/api/push`
-- **Description:** Push a file from an external API download service. If a file with the same `file_id` already exists, the old version is replaced and the document is flagged for review.
-
-**Request:** `multipart/form-data`
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `file` | file | Yes | The file to push |
-| `file_id` | string | Yes | External file ID from the API download service (used for deduplication) |
-| `metadata` | string (JSON) | No | JSON metadata (same format as upload metadata) |
-
-**cURL example:**
-
-```bash
-curl -X POST http://localhost:8000/api/push \
-  -F "file=@/path/to/document.pdf" \
-  -F "file_id=ext-file-001" \
-  -F 'metadata={"jurisdiction":"federal","tax_year":2024}'
-```
-
-**Success Response (201):**
-
-```json
-{
-  "document_id": "pending",
-  "uploaded_file_id": null,
-  "registry_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "filename": "document.pdf",
-  "file_size": 512000,
-  "blob_path": "api-pushed/a1b2c3d4.pdf",
-  "blob_url": "https://storageaccount.blob.core.windows.net/api-pushed/a1b2c3d4.pdf",
-  "content_type": "application/pdf",
-  "status": "processing",
-  "chunks_created": 0,
-  "word_count": 0,
-  "page_count": 0,
-  "parsing_quality": 0.0,
-  "message": "File pushed successfully. Processing in background...",
-  "document": null
-}
-```
-
-If replacing an existing file, `status` will be `"replacing"` and `message` will be `"File replaced successfully. Processing in background..."`.
-
-**Status Codes:**
-- `201` - File pushed, processing started
-- `400` - Bad request
-- `413` - File too large
-- `503` - Azure Blob Storage not configured
-- `500` - Server error
-
----
-
-#### List Pushed Files
-
-- **Method:** `GET`
-- **URL:** `/api/push/list`
-- **Description:** Lists all files pushed via the external API download service. Useful for sync operations or identifying files needing review after replacement.
-
-**Query Parameters:**
-
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `page` | integer | No | `1` | Page number |
-| `limit` | integer | No | `20` | Items per page (1-100) |
-| `needs_review` | boolean | No | - | Filter by review status |
-
-**Success Response (200):**
-
-```json
-{
-  "items": [
-    {
-      "registry_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-      "external_file_id": "ext-file-001",
-      "document_name": "document.pdf",
-      "title": "Federal Tax Guide",
-      "processing_status": "completed",
-      "solr_document_id": "solr-doc-uuid",
-      "needs_review": false,
-      "replaced_at": null,
-      "created_at": "2024-12-01T10:30:00Z",
-      "jurisdiction": "federal",
-      "state": null,
-      "chunk_count": 32
-    }
-  ],
-  "page": 1,
-  "limit": 20,
-  "total": 1
-}
-```
-
-**Status Codes:**
-- `200` - Success
-- `500` - Server error
-
----
-
-#### Delete Pushed File
-
-- **Method:** `DELETE`
-- **URL:** `/api/push/{file_id}`
-- **Description:** Deletes a file that was pushed via the API download service. Removes the document from Solr, blob storage, and the registry.
-
-**Path Parameters:**
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `file_id` | string | Yes | External file ID |
 
 **Success Response:** `204 No Content`
 
-**Error Response (404):**
-
-```json
-{
-  "detail": "File with ID 'ext-file-001' not found"
-}
-```
-
-**Status Codes:**
-- `204` - Deleted
-- `404` - File not found
-- `500` - Server error
+| Status | Message |
+|---|---|
+| 404 | Document not found |
 
 ---
 
-### URL Management & Web Scraping Endpoints
+### `GET /api/documents/{document_id}/chunks`
 
----
+**Description:** Get paginated chunks for a document.
 
-#### List URLs
-
-- **Method:** `GET`
-- **URL:** `/api/urls`
-- **Description:** Lists all configured scraping URLs with filters and pagination.
+**Auth required:** No
 
 **Query Parameters:**
 
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `category` | string | No | - | `"Federal"`, `"State"`, `"Local"` |
-| `state` | string | No | - | Filter by state |
-| `status` | string | No | - | `"active"`, `"inactive"`, `"error"`, `"scraping"` |
-| `data_source` | string | No | - | `"scrape"` or `"file"` |
-| `search` | string | No | - | Search in URL text |
-| `page` | integer | No | `1` | Page number |
-| `limit` | integer | No | `20` | Items per page (1-100) |
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `page` | int | No | Page number (default 1) |
+| `limit` | int | No | Items per page 1-1000 (default 20) |
 
 **Success Response (200):**
-
 ```json
 {
-  "items": [
-    {
-      "id": "url-uuid",
-      "url": "https://www.irs.gov/forms-pubs",
-      "name": "IRS Forms & Publications",
-      "category": "Federal",
-      "state": null,
-      "city": null,
-      "data_source": "scrape",
-      "schedule_frequency": "monthly",
-      "status": "active",
-      "last_scraped": "2024-12-01T10:30:00Z",
-      "documents_count": 150,
-      "error_message": null,
-      "delay_between_requests": 2,
-      "max_requests_per_minute": 30,
-      "max_files_per_session": 10000,
-      "created_at": "2024-11-01T08:00:00Z",
-      "updated_at": "2024-12-01T10:30:00Z"
-    }
-  ],
-  "total": 10,
+  "items": [],
+  "total": 45,
   "page": 1,
   "limit": 20,
-  "pages": 1,
-  "has_next": false,
+  "pages": 3,
+  "has_next": true,
   "has_prev": false
 }
 ```
 
-**Status Codes:**
-- `200` - Success
-- `500` - Server error
-
 ---
 
-#### Get URL by ID
+### `PUT /api/documents/{document_id}/governance`
 
-- **Method:** `GET`
-- **URL:** `/api/urls/{url_id}`
-- **Description:** Returns a single URL configuration by its ID.
+**Description:** Update the governance state of a document and record history.
 
-**Path Parameters:**
+**Auth required:** No
 
-| Parameter | Type | Required | Description |
+**Request Body:**
+
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `url_id` | string | Yes | URL ID (UUID) |
+| `governance_state` | string | Yes | `Draft`, `Under Review`, `Published`, `Deprecated`, `Archived` |
+| `changed_by` | string | Yes | User who made the change |
+| `reason` | string | No | Reason for the change |
 
-**Success Response (200):** Single `URLResponse` object (same shape as items in list).
+**Success Response (200):** Updated `DocumentResponse`.
 
-**Status Codes:**
-- `200` - Success
-- `404` - URL not found
-- `500` - Server error
-
----
-
-#### Create URL
-
-- **Method:** `POST`
-- **URL:** `/api/urls`
-- **Description:** Adds a new URL for scraping. Validates that the URL doesn't already exist.
-
-**Request Body:**
-
-```json
-{
-  "url": "https://www.irs.gov/forms-pubs",
-  "name": "IRS Forms & Publications",
-  "description": "Official IRS forms and publications page",
-  "category": "Federal",
-  "state": null,
-  "city": null,
-  "data_source": "scrape",
-  "schedule_frequency": "monthly",
-  "delay_between_requests": 2,
-  "max_requests_per_minute": 30,
-  "max_files_per_session": 10000
-}
-```
-
-| Field | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `url` | string | Yes | - | URL to scrape |
-| `name` | string | No | - | Display name |
-| `description` | string | No | - | Description |
-| `category` | string | No | `"Federal"` | `"Federal"`, `"State"`, or `"Local"` |
-| `state` | string | No | - | State code |
-| `city` | string | No | - | City name |
-| `data_source` | string | No | `"scrape"` | `"scrape"` or `"file"` |
-| `schedule_frequency` | string | No | `"on_demand"` | `"on_demand"`, `"daily"`, `"weekly"`, `"monthly"`, `"quarterly"`, `"yearly"` |
-| `delay_between_requests` | integer | No | `2` | Seconds between requests (>= 1) |
-| `max_requests_per_minute` | integer | No | `30` | Max requests per minute (>= 1) |
-| `max_files_per_session` | integer | No | `10000` | Max files to download (>= 1) |
-
-**Success Response (201):** Returns the created `URLResponse` object.
-
-**Error Response (400):**
-
-```json
-{
-  "detail": "URL already exists"
-}
-```
-
-**Status Codes:**
-- `201` - Created
-- `400` - URL already exists
-- `422` - Validation error
-- `500` - Server error
+| Status | Message |
+|---|---|
+| 404 | Document not found |
 
 ---
 
-#### Update URL
+### `POST /api/documents/{document_id}/reprocess`
 
-- **Method:** `PUT`
-- **URL:** `/api/urls/{url_id}`
-- **Description:** Updates a URL configuration. Only provided fields are updated.
+**Description:** Re-queue a failed document for reprocessing via Celery. Only works if the document is in `sync_failed` or `index_failed` status.
 
-**Request Body:**
-
-```json
-{
-  "schedule_frequency": "weekly",
-  "status": "inactive"
-}
-```
-
-All fields are optional.
-
-**Status Codes:**
-- `200` - Updated
-- `404` - URL not found
-- `500` - Server error
-
----
-
-#### Delete URL
-
-- **Method:** `DELETE`
-- **URL:** `/api/urls/{url_id}`
-- **Description:** Deletes a URL and all associated data (jobs, discovered pages, path rules).
-
-**Status Codes:**
-- `204` - Deleted
-- `404` - URL not found
-- `500` - Server error
-
----
-
-#### Trigger Scrape
-
-- **Method:** `POST`
-- **URL:** `/api/urls/{url_id}/scrape`
-- **Description:** Triggers a scraping job for a URL. Downloads all approved discovered pages and processes them through the full ingestion pipeline (blob storage, parse, classify, chunk, embed, Solr index). Runs as a background task.
-
-**Path Parameters:**
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `url_id` | string | Yes | URL ID |
+**Auth required:** No
 
 **Success Response (200):**
-
 ```json
 {
-  "url_id": "url-uuid",
-  "job_id": "job-uuid",
-  "status": "pending",
-  "current": 0,
-  "total": 0,
-  "message": "Scrape job created, starting...",
-  "documents_created": 0,
-  "documents_failed": 0,
-  "started_at": null
+  "registry_id": "uuid",
+  "status": "queued",
+  "message": "Document queued for reprocessing"
 }
 ```
 
-If already scraping, returns the current progress instead.
-
-**Status Codes:**
-- `200` - Scrape started or already in progress
-- `404` - URL not found
-- `500` - Server error
+| Status | Message |
+|---|---|
+| 404 | Document not found |
 
 ---
 
-#### Get Scrape Progress
+### `POST /api/documents/reprocess-failed`
 
-- **Method:** `GET`
-- **URL:** `/api/urls/{url_id}/scrape/progress`
-- **Description:** Returns the current scraping progress for a URL. Poll this endpoint to track scraping status.
+**Description:** Bulk reprocess all failed documents (up to 1000).
+
+**Auth required:** No
 
 **Success Response (200):**
-
 ```json
 {
-  "url_id": "url-uuid",
-  "job_id": "job-uuid",
-  "status": "running",
-  "current": 45,
-  "total": 150,
-  "message": "Processing page 45 of 150",
-  "documents_created": 40,
-  "documents_failed": 2,
-  "started_at": "2024-12-01T10:30:00Z"
+  "queued_count": 5,
+  "skipped_count": 0,
+  "failed_ids": [],
+  "message": "5 documents queued for reprocessing"
 }
 ```
 
-Possible `status` values: `"idle"`, `"pending"`, `"running"`, `"completed"`, `"failed"`, `"cancelled"`.
+---
 
-**Status Codes:**
-- `200` - Success
-- `404` - URL not found
-- `500` - Server error
+### Dashboard
 
 ---
 
-#### Cancel Scrape
+### `GET /api/dashboard/stats`
 
-- **Method:** `POST`
-- **URL:** `/api/urls/{url_id}/scrape/cancel`
-- **Description:** Sends a cancellation signal to stop an active scrape job.
+**Description:** Get aggregated document and chunk statistics with facet breakdowns.
+
+**Auth required:** No
 
 **Success Response (200):**
-
-```json
-{
-  "message": "Cancellation signal sent",
-  "url_id": "url-uuid"
-}
-```
-
-**Status Codes:**
-- `200` - Cancellation signal sent (or no active scrape to cancel)
-- `500` - Server error
-
----
-
-### Page Discovery Endpoints
-
-These endpoints manage the discovery phase where a website is crawled to find pages before actual content ingestion.
-
----
-
-#### Start Discovery
-
-- **Method:** `POST`
-- **URL:** `/api/urls/{url_id}/discover`
-- **Description:** Starts a website crawl to discover pages. Does not ingest content -- just finds and catalogs pages. Discovered pages can then be reviewed and approved before scraping.
-
-**Request Body:**
-
-```json
-{
-  "max_depth": 3,
-  "max_pages": 500,
-  "respect_robots": true,
-  "delay_seconds": 1.0,
-  "add_common_blocks": true
-}
-```
-
-| Field | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `max_depth` | integer | No | `3` | Maximum crawl depth (1-10) |
-| `max_pages` | integer | No | `500` | Maximum pages to discover (1-5000) |
-| `respect_robots` | boolean | No | `true` | Respect robots.txt |
-| `delay_seconds` | float | No | `1.0` | Delay between requests (0.1-10.0) |
-| `add_common_blocks` | boolean | No | `true` | Add common block patterns (login, cart, etc.) |
-
-**Success Response (200):**
-
-```json
-{
-  "url_id": "url-uuid",
-  "status": "started",
-  "pages_discovered": 0,
-  "message": "Discovery started",
-  "queue_size": 0,
-  "current_depth": 0,
-  "recent_urls": [],
-  "rules_refreshed_count": 0,
-  "urls_skipped_by_rules": 0
-}
-```
-
-**Status Codes:**
-- `200` - Discovery started or already in progress
-- `404` - URL not found
-- `500` - Server error
-
----
-
-#### Get Discovery Status
-
-- **Method:** `GET`
-- **URL:** `/api/urls/{url_id}/discover/status`
-- **Description:** Returns the current live discovery status including progress, queue size, and recently discovered URLs.
-
-**Success Response (200):**
-
-```json
-{
-  "url_id": "url-uuid",
-  "status": "running",
-  "pages_discovered": 127,
-  "message": "Crawling website...",
-  "queue_size": 45,
-  "current_depth": 2,
-  "recent_urls": [
-    { "url": "https://example.com/forms/2024", "depth": 2, "title": "2024 Forms" }
-  ],
-  "rules_refreshed_count": 3,
-  "urls_skipped_by_rules": 15
-}
-```
-
-Possible `status` values: `"idle"`, `"started"`, `"running"`, `"paused"`, `"completed"`, `"cancelled"`, `"error"`.
-
-**Status Codes:**
-- `200` - Success
-
----
-
-#### Pause Discovery
-
-- **Method:** `POST`
-- **URL:** `/api/urls/{url_id}/discover/pause`
-- **Description:** Pauses an active discovery crawl. The crawl pauses at the next iteration; all pages discovered so far are preserved.
-
-**Status Codes:**
-- `200` - Pause signal sent
-- `400` - Cannot pause (not running)
-- `404` - No discovery found
-
----
-
-#### Resume Discovery
-
-- **Method:** `POST`
-- **URL:** `/api/urls/{url_id}/discover/resume`
-- **Description:** Resumes a paused discovery crawl from where it left off.
-
-**Status Codes:**
-- `200` - Resume signal sent
-- `400` - Cannot resume (not paused)
-- `404` - No discovery found
-
----
-
-#### Cancel Discovery
-
-- **Method:** `POST`
-- **URL:** `/api/urls/{url_id}/discover/cancel`
-- **Description:** Cancels an active or paused discovery crawl. All pages discovered so far are committed.
-
-**Status Codes:**
-- `200` - Cancel signal sent
-- `400` - Cannot cancel (already completed/idle)
-- `404` - No discovery found
-
----
-
-#### List Discovered Pages
-
-- **Method:** `GET`
-- **URL:** `/api/urls/{url_id}/discovered-pages`
-- **Description:** Lists all pages discovered for a URL with filtering and pagination.
-
-**Query Parameters:**
-
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `status` | string | No | - | `"pending"`, `"approved"`, `"rejected"`, `"ingested"` |
-| `is_document` | boolean | No | - | Filter for downloadable documents only |
-| `min_depth` | integer | No | - | Minimum crawl depth |
-| `max_depth` | integer | No | - | Maximum crawl depth |
-| `page` | integer | No | `1` | Page number |
-| `limit` | integer | No | `50` | Items per page (1-200) |
-
-**Success Response (200):**
-
-```json
-{
-  "items": [
-    {
-      "id": "page-uuid",
-      "url": "https://example.com/forms/2024/form-1040.pdf",
-      "path": "/forms/2024/form-1040.pdf",
-      "depth": 2,
-      "title": "Form 1040 - 2024",
-      "content_type": "application/pdf",
-      "status": "pending",
-      "is_document": true,
-      "http_status": 200,
-      "discovered_at": "2024-12-01T10:30:00Z"
-    }
-  ],
-  "total": 127,
-  "page": 1,
-  "limit": 50,
-  "pages": 3
-}
-```
-
-**Status Codes:**
-- `200` - Success
-- `500` - Server error
-
----
-
-#### Approve Pages
-
-- **Method:** `POST`
-- **URL:** `/api/urls/{url_id}/discovered-pages/approve`
-- **Description:** Approve selected pages for ingestion.
-
-**Request Body:**
-
-```json
-{
-  "page_ids": ["page-uuid-1", "page-uuid-2", "page-uuid-3"],
-  "reason": null
-}
-```
-
-**Success Response (200):**
-
-```json
-{
-  "affected_count": 3,
-  "message": "Approved 3 pages"
-}
-```
-
-**Status Codes:**
-- `200` - Pages approved
-- `500` - Server error
-
----
-
-#### Reject Pages
-
-- **Method:** `POST`
-- **URL:** `/api/urls/{url_id}/discovered-pages/reject`
-- **Description:** Reject selected pages (they won't be ingested).
-
-**Request Body:**
-
-```json
-{
-  "page_ids": ["page-uuid-4"],
-  "reason": "Not a tax document"
-}
-```
-
-**Success Response (200):**
-
-```json
-{
-  "affected_count": 1,
-  "message": "Rejected 1 pages"
-}
-```
-
-**Status Codes:**
-- `200` - Pages rejected
-- `500` - Server error
-
----
-
-#### Approve All Pending Pages
-
-- **Method:** `POST`
-- **URL:** `/api/urls/{url_id}/discovered-pages/approve-all`
-- **Description:** Approves all pages with `pending` status for this URL.
-
-**Success Response (200):**
-
-```json
-{
-  "affected_count": 85,
-  "message": "Approved 85 pages"
-}
-```
-
-**Status Codes:**
-- `200` - All pending pages approved
-- `500` - Server error
-
----
-
-#### Reject All Pending Pages
-
-- **Method:** `POST`
-- **URL:** `/api/urls/{url_id}/discovered-pages/reject-all`
-- **Description:** Rejects all pages with `pending` status for this URL.
-
-**Query Parameters:**
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `reason` | string | No | Rejection reason |
-
-**Status Codes:**
-- `200` - All pending pages rejected
-- `500` - Server error
-
----
-
-#### Get Site Tree
-
-- **Method:** `GET`
-- **URL:** `/api/urls/{url_id}/site-tree`
-- **Description:** Returns a hierarchical tree structure of all discovered pages, organized by URL path.
-
-**Success Response (200):**
-
-```json
-{
-  "path": "/",
-  "depth": 0,
-  "page_count": 127,
-  "pages": [],
-  "children": [
-    {
-      "path": "/forms",
-      "depth": 1,
-      "page_count": 45,
-      "pages": [
-        { "id": "page-uuid", "url": "https://example.com/forms", "status": "approved" }
-      ],
-      "children": [
-        {
-          "path": "/forms/2024",
-          "depth": 2,
-          "page_count": 20,
-          "pages": [],
-          "children": []
-        }
-      ]
-    }
-  ]
-}
-```
-
-**Status Codes:**
-- `200` - Success
-- `500` - Server error
-
----
-
-#### Get Discovery Stats
-
-- **Method:** `GET`
-- **URL:** `/api/urls/{url_id}/discovery-stats`
-- **Description:** Returns statistics about discovered pages for a URL (counts by status, depth, content type, etc.).
-
-**Success Response (200):**
-
-```json
-{
-  "total_pages": 127,
-  "by_status": {
-    "pending": 42,
-    "approved": 70,
-    "rejected": 10,
-    "ingested": 5
-  },
-  "by_depth": {
-    "0": 1,
-    "1": 15,
-    "2": 67,
-    "3": 44
-  },
-  "documents_count": 35
-}
-```
-
-**Status Codes:**
-- `200` - Success
-- `500` - Server error
-
----
-
-### Path Rules Endpoints
-
-Path rules control which URL paths are blocked or allowed during discovery and scraping.
-
----
-
-#### List Path Rules
-
-- **Method:** `GET`
-- **URL:** `/api/urls/{url_id}/path-rules`
-- **Description:** Lists all path rules configured for a URL.
-
-**Query Parameters:**
-
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `rule_type` | string | No | - | `"block"` or `"allow"` |
-| `source` | string | No | - | `"manual"`, `"robots_txt"`, or `"auto"` |
-| `page` | integer | No | `1` | Page number |
-| `limit` | integer | No | `50` | Items per page (1-200) |
-
-**Success Response (200):**
-
-```json
-{
-  "items": [
-    {
-      "id": "rule-uuid",
-      "pattern": "/login/*",
-      "rule_type": "block",
-      "reason": "Login pages are not tax documents",
-      "is_regex": false,
-      "is_glob": true,
-      "case_sensitive": false,
-      "priority": 0,
-      "source": "manual",
-      "match_count": 5,
-      "created_at": "2024-12-01T10:30:00Z"
-    }
-  ],
-  "total": 12
-}
-```
-
-**Status Codes:**
-- `200` - Success
-- `500` - Server error
-
----
-
-#### Create Path Rule
-
-- **Method:** `POST`
-- **URL:** `/api/urls/{url_id}/path-rules`
-- **Description:** Creates a new path rule for filtering URLs during discovery/scraping.
-
-**Request Body:**
-
-```json
-{
-  "pattern": "/login/*",
-  "rule_type": "block",
-  "reason": "Login pages are not relevant",
-  "is_regex": false,
-  "is_glob": true,
-  "case_sensitive": false,
-  "priority": 0
-}
-```
-
-| Field | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `pattern` | string | Yes | - | Path pattern (e.g., `/login/*`, `*.pdf`) |
-| `rule_type` | string | No | `"block"` | `"block"` or `"allow"` |
-| `reason` | string | No | - | Why this rule exists |
-| `is_regex` | boolean | No | `false` | Pattern is a regex |
-| `is_glob` | boolean | No | `true` | Pattern is a glob |
-| `case_sensitive` | boolean | No | `false` | Case-sensitive matching |
-| `priority` | integer | No | `0` | Higher priority = evaluated first |
-
-**Success Response (201):** Returns the created `PathRuleResponse`.
-
-**Status Codes:**
-- `201` - Created
-- `500` - Server error
-
----
-
-#### Delete Path Rule
-
-- **Method:** `DELETE`
-- **URL:** `/api/urls/{url_id}/path-rules/{rule_id}`
-- **Description:** Deletes a path rule.
-
-**Status Codes:**
-- `204` - Deleted
-- `404` - Rule not found
-- `500` - Server error
-
----
-
-### API Source Configuration Endpoints
-
-Manage external API source configurations for automated data feeds.
-
----
-
-#### Create API Source
-
-- **Method:** `POST`
-- **URL:** `/api/sources`
-- **Description:** Creates a new external API source configuration. API keys and OAuth tokens are stored encrypted.
-
-**Request Body:**
-
-```json
-{
-  "name": "IRS EForms API",
-  "description": "IRS electronic forms download API",
-  "api_endpoint": "https://api.irs.gov/v1/forms",
-  "category": "federal",
-  "auth_type": "api_key",
-  "api_key": "your-api-key-here",
-  "oauth_token": null,
-  "custom_headers": {
-    "X-Custom-Header": "value"
-  },
-  "fetch_frequency": "daily",
-  "max_file_size_mb": 50
-}
-```
-
-| Field | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `name` | string | Yes | - | Source name (1-255 chars) |
-| `description` | string | No | - | Description |
-| `api_endpoint` | string | Yes | - | External API URL |
-| `category` | string | No | `"federal"` | `"federal"`, `"state"`, `"local"`, `"forms"` |
-| `auth_type` | string | No | `"api_key"` | `"api_key"`, `"bearer"`, `"basic"`, `"oauth"`, `"none"` |
-| `api_key` | string | No | - | API key (stored encrypted) |
-| `oauth_token` | string | No | - | OAuth token (stored encrypted) |
-| `custom_headers` | object | No | - | Custom HTTP headers |
-| `fetch_frequency` | string | No | `"daily"` | `"hourly"`, `"daily"`, `"weekly"`, `"monthly"` |
-| `max_file_size_mb` | integer | No | `50` | Max file size in MB (1-500) |
-
-**Success Response (201):**
-
-```json
-{
-  "id": "source-uuid",
-  "name": "IRS EForms API",
-  "description": "IRS electronic forms download API",
-  "api_endpoint": "https://api.irs.gov/v1/forms",
-  "category": "federal",
-  "status": "active",
-  "auth_type": "api_key",
-  "api_key_configured": true,
-  "oauth_token_configured": false,
-  "custom_headers": { "X-Custom-Header": "value" },
-  "fetch_frequency": "daily",
-  "max_file_size_mb": 50,
-  "last_fetched_at": null,
-  "total_files_pushed": 0,
-  "error_message": null,
-  "created_at": "2024-12-01T10:30:00Z",
-  "updated_at": "2024-12-01T10:30:00Z"
-}
-```
-
-Note: API keys and tokens are never returned in responses. Instead, `api_key_configured` and `oauth_token_configured` booleans indicate whether they are set.
-
-**Status Codes:**
-- `201` - Created
-- `422` - Validation error
-- `500` - Server error
-
----
-
-#### List API Sources
-
-- **Method:** `GET`
-- **URL:** `/api/sources`
-- **Description:** Lists all configured API sources with filtering and pagination.
-
-**Query Parameters:**
-
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `category` | string | No | - | `"federal"`, `"state"`, `"local"`, `"forms"` |
-| `status` | string | No | - | `"active"`, `"inactive"`, `"paused"` |
-| `search` | string | No | - | Search in name, description, endpoint |
-| `page` | integer | No | `1` | Page number |
-| `limit` | integer | No | `20` | Items per page (1-100) |
-
-**Success Response (200):**
-
-```json
-{
-  "items": [
-    {
-      "id": "source-uuid",
-      "name": "IRS EForms API",
-      "description": "...",
-      "api_endpoint": "https://api.irs.gov/v1/forms",
-      "category": "federal",
-      "status": "active",
-      "auth_type": "api_key",
-      "api_key_configured": true,
-      "oauth_token_configured": false,
-      "custom_headers": null,
-      "fetch_frequency": "daily",
-      "max_file_size_mb": 50,
-      "last_fetched_at": "2024-12-01T10:30:00Z",
-      "total_files_pushed": 42,
-      "error_message": null,
-      "created_at": "2024-11-01T08:00:00Z",
-      "updated_at": "2024-12-01T10:30:00Z"
-    }
-  ],
-  "total": 3,
-  "page": 1,
-  "limit": 20,
-  "pages": 1,
-  "has_next": false,
-  "has_prev": false
-}
-```
-
-**Status Codes:**
-- `200` - Success
-- `500` - Server error
-
----
-
-#### Get API Source
-
-- **Method:** `GET`
-- **URL:** `/api/sources/{source_id}`
-- **Description:** Returns a single API source configuration (credentials masked).
-
-**Status Codes:**
-- `200` - Success
-- `400` - Invalid source ID format
-- `404` - Source not found
-
----
-
-#### Update API Source
-
-- **Method:** `PUT`
-- **URL:** `/api/sources/{source_id}`
-- **Description:** Updates an API source configuration. Only provided fields are updated. Pass an empty string for `api_key` or `oauth_token` to clear them.
-
-**Request Body:**
-
-```json
-{
-  "status": "paused",
-  "fetch_frequency": "weekly"
-}
-```
-
-**Status Codes:**
-- `200` - Updated
-- `400` - Invalid source ID format
-- `404` - Source not found
-- `500` - Server error
-
----
-
-#### Delete API Source
-
-- **Method:** `DELETE`
-- **URL:** `/api/sources/{source_id}`
-- **Description:** Permanently deletes an API source configuration.
-
-**Status Codes:**
-- `204` - Deleted
-- `400` - Invalid source ID format
-- `404` - Source not found
-
----
-
-### Dashboard & Metrics Endpoints
-
----
-
-#### Dashboard Stats
-
-- **Method:** `GET`
-- **URL:** `/api/dashboard/stats`
-- **Description:** Returns overall system statistics including document/chunk counts with breakdowns by governance state, jurisdiction, sync status, and tax year.
-
-**Success Response (200):**
-
 ```json
 {
   "total_documents": 500,
-  "total_chunks": 15000,
+  "total_chunks": 12500,
   "total_tokens": 3500000,
-  "documents_by_governance": {
-    "Draft": 50,
-    "Under Review": 30,
-    "Published": 400,
-    "Deprecated": 15,
-    "Archived": 5
-  },
-  "documents_by_sync_status": {
-    "synced": 490,
-    "sync_failed": 10
-  },
-  "documents_by_index_status": {
-    "indexed": 480,
-    "not_indexed": 20
-  },
-  "documents_by_jurisdiction": {
-    "federal": 200,
-    "state": 250,
-    "local": 50
-  },
-  "chunks_by_jurisdiction": {
-    "federal": 6000,
-    "state": 7500,
-    "local": 1500
-  },
-  "chunks_by_tax_year": {
-    "2024": 8000,
-    "2023": 5000,
-    "2022": 2000
-  }
+  "documents_by_governance": { "Published": 350, "Draft": 100, "Under Review": 50 },
+  "documents_by_sync_status": { "synced": 490, "sync_failed": 10 },
+  "documents_by_index_status": { "indexed": 480, "not_indexed": 20 },
+  "documents_by_jurisdiction": { "federal": 200, "state": 250, "local": 50 },
+  "chunks_by_jurisdiction": { "federal": 5000, "state": 6000, "local": 1500 },
+  "chunks_by_tax_year": { "2024": 8000, "2023": 4500 }
 }
 ```
 
-**Status Codes:**
-- `200` - Success
-- `500` - Server error
-
 ---
 
-#### RAG Health Metrics
+### `GET /api/dashboard/rag-health`
 
-- **Method:** `GET`
-- **URL:** `/api/dashboard/rag-health`
-- **Description:** Returns RAG system health metrics including Solr collection health, document coverage, and average chunk/token statistics.
+**Description:** RAG system health: Solr collection status, indexing coverage, averages.
+
+**Auth required:** No
 
 **Success Response (200):**
-
 ```json
 {
   "solr_documents_healthy": true,
   "solr_chunks_healthy": true,
-  "indexed_documents": 500,
-  "indexed_chunks": 15000,
-  "avg_chunks_per_document": 30.0,
-  "avg_tokens_per_chunk": 233.33,
-  "coverage_by_jurisdiction": {
-    "federal": 200,
-    "state": 250,
-    "local": 50
-  },
-  "coverage_by_tax_year": {
-    "2024": 8000,
-    "2023": 5000,
-    "2022": 2000
-  }
+  "indexed_documents": 480,
+  "indexed_chunks": 12000,
+  "avg_chunks_per_document": 25.0,
+  "avg_tokens_per_chunk": 280.0,
+  "coverage_by_jurisdiction": { "federal": 200, "state": 230, "local": 50 },
+  "coverage_by_tax_year": { "2024": 300, "2023": 180 }
 }
 ```
 
-**Status Codes:**
-- `200` - Success
-- `500` - Server error
-
 ---
 
-#### System Alerts
+### `GET /api/dashboard/alerts`
 
-- **Method:** `GET`
-- **URL:** `/api/dashboard/alerts`
-- **Description:** Returns a list of active system alerts. Checks for: Solr collection issues, documents needing human review, sync/index failures.
+**Description:** System alerts: Solr outages, review queue size, sync/index failures.
+
+**Auth required:** No
 
 **Success Response (200):**
-
 ```json
 {
   "alerts": [
     {
-      "id": "documents_need_review",
+      "id": "alert-1",
       "level": "warning",
-      "message": "12 document(s) need human review",
-      "timestamp": "",
-      "resolved": false
-    },
-    {
-      "id": "sync_failures",
-      "level": "warning",
-      "message": "3 document(s) failed to sync",
-      "timestamp": "",
+      "message": "12 documents pending human review",
+      "timestamp": "2024-12-01T12:00:00Z",
       "resolved": false
     }
   ],
-  "total": 2
+  "total": 1
 }
 ```
 
-Alert levels: `"info"`, `"warning"`, `"error"`.
+---
 
-**Status Codes:**
-- `200` - Success
-- `500` - Server error
+### `GET /api/dashboard/freshness`
+
+**Description:** Document freshness metrics: stale document counts, recent URL scraping activity.
+
+**Auth required:** No
+
+**Success Response (200):**
+```json
+{
+  "docs_stale_over_30_days": 15,
+  "docs_stale_over_1_year": 3,
+  "docs_stale_over_2_years": 1,
+  "urls_scraped_last_7_days": 8,
+  "stale_documents": [],
+  "recent_url_activity": []
+}
+```
 
 ---
 
-#### Document Freshness Metrics
+### `GET /api/dashboard/scalability`
 
-- **Method:** `GET`
-- **URL:** `/api/dashboard/freshness`
-- **Description:** Returns document freshness metrics. Identifies stale documents (not updated in 30+ days, 1+ year, 2+ years) and shows recent URL scraping activity.
+**Description:** Scale metrics: total resources, job throughput, success rates.
+
+**Auth required:** No
 
 **Success Response (200):**
+```json
+{
+  "total_documents": 500,
+  "total_chunks": 12500,
+  "total_urls": 25,
+  "active_urls": 20,
+  "total_jobs_last_24h": 10,
+  "documents_processed_last_24h": 35,
+  "avg_job_duration_seconds": 120.5,
+  "job_success_rate": 0.95,
+  "documents_by_status": { "completed": 30, "failed": 5 }
+}
+```
+
+---
+
+### Governance
+
+---
+
+### `GET /api/governance/logs`
+
+**Description:** Query governance history entries extracted from Solr document `governanceHistory` fields.
+
+**Auth required:** No
+
+**Query Parameters:**
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `document_id` | string | No | Filter by document ID |
+| `from_state` | string | No | Filter by origin state |
+| `to_state` | string | No | Filter by target state |
+| `changed_by` | string | No | Filter by actor |
+| `page` | int | No | Page number (default 1) |
+| `limit` | int | No | Items per page (default 20) |
+
+**Success Response (200):**
+```json
+{
+  "items": [
+    {
+      "id": "log-uuid",
+      "document_id": "doc-uuid",
+      "document_name": "form-1040.pdf",
+      "from_state": "Draft",
+      "to_state": "Under Review",
+      "changed_by": "admin@example.com",
+      "reason": "Ready for review",
+      "timestamp": "2024-12-01T10:00:00Z"
+    }
+  ],
+  "total": 1,
+  "page": 1,
+  "limit": 20,
+  "pages": 1,
+  "has_next": false,
+  "has_prev": false
+}
+```
+
+---
+
+### `POST /api/governance/logs`
+
+**Description:** Apply a governance state change to a document and record it in PostgreSQL audit log.
+
+**Auth required:** No
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `document_id` | string | Yes | Target document ID |
+| `to_state` | string | Yes | New governance state |
+| `changed_by` | string | Yes | Actor performing the change |
+| `reason` | string | No | Reason for the transition |
+
+**Success Response (201):** `GovernanceLogEntry` object.
+
+---
+
+### `GET /api/governance/logs/{document_id}`
+
+**Description:** Get all governance history entries for a specific document.
+
+**Auth required:** No
+
+**Success Response (200):** Array of `GovernanceLogEntry` objects.
+
+---
+
+### URL Management
+
+---
+
+### `GET /api/urls`
+
+**Description:** List configured scrape URLs with filtering and pagination.
+
+**Auth required:** No
+
+**Query Parameters:**
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `state` | string | No | Filter by state code |
+| `status` | string | No | `active`, `inactive`, `error`, `scraping` |
+| `data_source` | string | No | `scrape` or `file` |
+| `search` | string | No | Free-text search |
+| `page` | int | No | Page number (default 1) |
+| `limit` | int | No | Items per page (default 20) |
+
+**Success Response (200):** `URLListResponse` -- paginated list of `URLResponse` objects.
+
+---
+
+### `GET /api/urls/{url_id}`
+
+**Description:** Get a single scrape URL by ID.
+
+**Auth required:** No
+
+**Success Response (200):** `URLResponse` object.
+
+| Status | Message |
+|---|---|
+| 404 | URL not found |
+
+---
+
+### `POST /api/urls`
+
+**Description:** Create a new scrape URL.
+
+**Auth required:** No
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `url` | string | Yes | URL to scrape |
+| `name` | string | No | Display name |
+| `description` | string | No | Description |
+| `jurisdiction` | string | No | `federal` (default), `state`, or `local` |
+| `state` | string | Conditional | Required if jurisdiction is `state` or `local` |
+| `city` | string | Conditional | Required if jurisdiction is `local` |
+| `data_source` | string | No | `scrape` (default) or `file` |
+| `delay_between_requests` | int | No | Delay in seconds (default 2) |
+| `max_requests_per_minute` | int | No | Rate limit (default 30) |
+| `max_files_per_session` | int | No | Max files per session (default 10000) |
+
+**Success Response (201):** `URLResponse` object.
+
+| Status | Message |
+|---|---|
+| 400 | Duplicate URL |
+
+---
+
+### `PUT /api/urls/{url_id}`
+
+**Description:** Update a scrape URL.
+
+**Auth required:** No
+
+**Request Body:** `URLUpdate` -- all fields optional.
+
+**Success Response (200):** Updated `URLResponse`.
+
+---
+
+### `DELETE /api/urls/{url_id}`
+
+**Description:** Delete a scrape URL.
+
+**Auth required:** No
+
+**Success Response:** `204 No Content`
+
+---
+
+### `POST /api/urls/{url_id}/scrape`
+
+**Description:** Start a Celery-backed scrape job for the URL.
+
+**Auth required:** No
+
+**Success Response (200):**
+```json
+{
+  "url_id": "uuid",
+  "job_id": "job-uuid",
+  "status": "running",
+  "current": 0,
+  "total": 0,
+  "message": "Scraping started",
+  "documents_created": 0,
+  "documents_failed": 0,
+  "started_at": "2024-12-01T10:00:00Z"
+}
+```
+
+---
+
+### `GET /api/urls/{url_id}/scrape/progress`
+
+**Description:** Get latest scrape job progress. Marks stale runs as failed.
+
+**Auth required:** No
+
+**Success Response (200):** `ScrapeProgress` object.
+
+---
+
+### `POST /api/urls/{url_id}/scrape/cancel`
+
+**Description:** Cancel a running scrape job via Redis signal and update the database.
+
+**Auth required:** No
+
+**Success Response (200):**
+```json
+{
+  "message": "Scrape job cancelled",
+  "url_id": "uuid"
+}
+```
+
+---
+
+### Page Discovery
+
+---
+
+### `POST /api/urls/{url_id}/discover`
+
+**Description:** Start a background site crawl to discover linked pages.
+
+**Auth required:** No
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `max_depth` | int | No | Maximum crawl depth 1-10 (default 3) |
+| `max_pages` | int | No | Maximum pages 1-5000 (default 500) |
+| `respect_robots` | bool | No | Honor robots.txt (default true) |
+| `delay_seconds` | float | No | Delay between requests 0.1-10.0 (default 1.0) |
+| `add_common_blocks` | bool | No | Add common block patterns (default true) |
+
+**Success Response (200):** `DiscoveryStatusResponse` object.
+
+---
+
+### `GET /api/urls/{url_id}/discover/status`
+
+**Description:** Get current crawl/discovery status from in-memory state.
+
+**Auth required:** No
+
+**Success Response (200):** `DiscoveryStatusResponse` object.
+
+---
+
+### `POST /api/urls/{url_id}/discover/pause`
+
+**Description:** Pause a running discovery crawl.
+
+**Auth required:** No
+
+**Success Response (200):** `DiscoveryStatusResponse` object.
+
+| Status | Message |
+|---|---|
+| 404 | No active discovery |
+| 400 | Cannot pause (not running) |
+
+---
+
+### `POST /api/urls/{url_id}/discover/resume`
+
+**Description:** Resume a paused discovery crawl.
+
+**Auth required:** No
+
+**Success Response (200):** `DiscoveryStatusResponse` object.
+
+---
+
+### `POST /api/urls/{url_id}/discover/cancel`
+
+**Description:** Cancel a running discovery crawl.
+
+**Auth required:** No
+
+**Success Response (200):** `DiscoveryStatusResponse` object.
+
+---
+
+### `GET /api/urls/{url_id}/discovered-pages`
+
+**Description:** List discovered pages with filtering.
+
+**Auth required:** No
+
+**Query Parameters:**
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `status` | string | No | `pending`, `approved`, `rejected`, `ingested` |
+| `is_document` | bool | No | Filter document-like pages |
+| `min_depth` | int | No | Minimum crawl depth |
+| `max_depth` | int | No | Maximum crawl depth |
+| `page` | int | No | Page number (default 1) |
+| `limit` | int | No | Items per page (default 20) |
+
+**Success Response (200):** `DiscoveredPageListResponse` -- paginated list of `DiscoveredPageResponse`.
+
+---
+
+### `POST /api/urls/{url_id}/discovered-pages/approve`
+
+**Description:** Approve specific discovered pages by ID.
+
+**Auth required:** No
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `page_ids` | string[] | Yes | List of page IDs to approve |
+
+**Success Response (200):**
+```json
+{
+  "affected_count": 5,
+  "message": "5 pages approved"
+}
+```
+
+---
+
+### `POST /api/urls/{url_id}/discovered-pages/reject`
+
+**Description:** Reject specific discovered pages by ID.
+
+**Auth required:** No
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `page_ids` | string[] | Yes | List of page IDs to reject |
+| `reason` | string | No | Rejection reason |
+
+**Success Response (200):** `BulkApprovalResponse` object.
+
+---
+
+### `POST /api/urls/{url_id}/discovered-pages/approve-all`
+
+**Description:** Approve all pending discovered pages for a URL.
+
+**Auth required:** No
+
+**Success Response (200):** `BulkApprovalResponse` object.
+
+---
+
+### `POST /api/urls/{url_id}/discovered-pages/reject-all`
+
+**Description:** Reject all pending discovered pages for a URL.
+
+**Auth required:** No
+
+**Query Parameters:**
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `reason` | string | No | Rejection reason |
+
+**Success Response (200):** `BulkApprovalResponse` object.
+
+---
+
+### `GET /api/urls/{url_id}/site-tree`
+
+**Description:** Get a hierarchical tree of all discovered paths for a URL.
+
+**Auth required:** No
+
+**Success Response (200):** Nested `SiteTreeNode` object.
+
+---
+
+### `GET /api/urls/{url_id}/discovery-stats`
+
+**Description:** Get counts of discovered pages grouped by status.
+
+**Auth required:** No
+
+**Success Response (200):**
+```json
+{
+  "total": 250,
+  "pending": 100,
+  "approved": 80,
+  "rejected": 50,
+  "ingested": 20,
+  "documents": 15
+}
+```
+
+---
+
+### Path Rules
+
+---
+
+### `GET /api/urls/{url_id}/path-rules`
+
+**Description:** List path include/exclude rules for a URL.
+
+**Auth required:** No
+
+**Query Parameters:**
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `rule_type` | string | No | `block` or `allow` |
+| `source` | string | No | `manual`, `robots_txt`, or `auto` |
+| `page` | int | No | Page number |
+| `limit` | int | No | Items per page |
+
+**Success Response (200):** `PathRuleListResponse` object.
+
+---
+
+### `POST /api/urls/{url_id}/path-rules`
+
+**Description:** Create a new path rule for a URL.
+
+**Auth required:** No
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `pattern` | string | Yes | Path pattern (glob or regex) |
+| `rule_type` | string | No | `block` (default) or `allow` |
+| `reason` | string | No | Why this rule exists |
+| `is_regex` | bool | No | Pattern is regex (default false) |
+| `is_glob` | bool | No | Pattern is glob (default true) |
+| `case_sensitive` | bool | No | Case-sensitive match (default false) |
+| `priority` | int | No | Rule priority (default 0) |
+
+**Success Response (201):** `PathRuleResponse` object.
+
+---
+
+### `DELETE /api/urls/{url_id}/path-rules/{rule_id}`
+
+**Description:** Delete a path rule.
+
+**Auth required:** No
+
+**Success Response:** `204 No Content`
+
+| Status | Message |
+|---|---|
+| 404 | Rule not found |
+
+---
+
+### Audit Logs
+
+---
+
+### `GET /api/audit/logs`
+
+**Description:** Query audit logs with filtering and pagination.
+
+**Auth required:** No
+
+**Query Parameters:**
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `action` | string | No | Filter by action (e.g. `update_document`) |
+| `resource_type` | string | No | Filter by resource type (e.g. `document`) |
+| `resource_id` | string | No | Filter by resource ID |
+| `actor` | string | No | Filter by actor |
+| `date_from` | datetime | No | Start date filter |
+| `date_to` | datetime | No | End date filter |
+| `search` | string | No | Free-text search |
+| `page` | int | No | Page number (default 1) |
+| `limit` | int | No | Items per page (default 20) |
+
+**Success Response (200):** `AuditLogsListResponse` -- paginated list of `AuditLogResponse`.
+
+---
+
+### `GET /api/audit/logs/document/{document_id}`
+
+**Description:** Get all audit log entries for a specific document.
+
+**Auth required:** No
+
+**Success Response (200):** `AuditLogsListResponse`.
+
+---
+
+### `GET /api/audit/logs/governance`
+
+**Description:** Get governance-related audit log entries.
+
+**Auth required:** No
+
+**Query Parameters:**
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `document_id` | string | No | Filter by document |
+| `actor` | string | No | Filter by actor |
+| `page` | int | No | Page number |
+| `limit` | int | No | Items per page |
+
+**Success Response (200):** `AuditLogsListResponse`.
+
+---
+
+### File Upload
+
+---
+
+### `POST /api/upload`
+
+**Description:** Upload a file (PDF, DOC, DOCX, TXT, XML, HTML) to Azure Blob Storage. The file is registered in PostgreSQL and optionally processed immediately (parsed, chunked, embedded, indexed to Solr) or queued via Celery.
+
+**Auth required:** No
+
+**Request:** `multipart/form-data`
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `file` | file | Yes | The document file |
+| `metadata` | string (JSON) | No | JSON string with `FileUploadMetadata` fields |
+
+**Metadata Fields (`FileUploadMetadata`):**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `jurisdiction` | string | Yes | `federal`, `state`, or `local` |
+| `state` | string | Conditional | Required for `state` or `local` jurisdiction |
+| `city` | string | Conditional | Required for `local` jurisdiction |
+| `tax_year` | int | No | Tax year (1900-2100) |
+| `tax_type` | string | No | Tax type |
+| `authority_level` | int | No | Authority level 1-6 |
+| `authority_level_rationale` | string | No | Rationale for authority level |
+| `knowledge_base_id` | string | No | Knowledge base ID (default `default`) |
+| `tags` | string[] | No | Document tags |
+| `title` | string | No | Document title |
+| `description` | string | No | Description |
+| `doc_type` | string | No | Document type |
+| `effective_from` | string | No | Effective start date (ISO 8601) |
+| `effective_to` | string | No | Effective end date (ISO 8601) |
+| `form_family` | string | No | Form family (e.g. `1040`, `SchC`) |
+
+**Success Response (201):**
+```json
+{
+  "document_id": "uuid",
+  "registry_id": "uuid",
+  "filename": "tax-document.pdf",
+  "file_size": 1024000,
+  "blob_path": "uploads/uuid.pdf",
+  "blob_url": "https://account.blob.core.windows.net/uploads/uuid.pdf",
+  "content_type": "application/pdf",
+  "status": "indexed",
+  "chunks_created": 45,
+  "word_count": 12500,
+  "page_count": 10,
+  "parsing_quality": 0.95,
+  "message": "File uploaded and indexed successfully",
+  "document": {}
+}
+```
+
+| Status | Message |
+|---|---|
+| 400 | Invalid file type or empty file |
+| 413 | File exceeds maximum upload size |
+| 503 | Azure Blob Storage not configured |
+
+---
+
+### API Push
+
+---
+
+### `POST /api/push`
+
+**Description:** Push or replace a file by external `file_id`. Used for external API integrations to send documents into the system.
+
+**Auth required:** No
+
+**Request:** `multipart/form-data`
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `file` | file | Yes | The document file |
+| `file_id` | string | Yes | External file identifier |
+| `metadata` | string (JSON) | No | JSON string with metadata fields |
+
+**Success Response (201):**
+```json
+{
+  "document_id": "uuid",
+  "registry_id": "uuid",
+  "filename": "document.pdf",
+  "file_size": 512000,
+  "blob_path": "api-pushed/uuid.pdf",
+  "blob_url": "https://...",
+  "content_type": "application/pdf",
+  "status": "queued",
+  "message": "File pushed successfully"
+}
+```
+
+---
+
+### `GET /api/push/list`
+
+**Description:** List all documents pushed via API (from the registry).
+
+**Auth required:** No
+
+**Query Parameters:**
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `page` | int | No | Page number (default 1) |
+| `limit` | int | No | Items per page (default 20) |
+| `needs_review` | bool | No | Filter by review flag |
+
+**Success Response (200):**
+```json
+{
+  "items": [],
+  "page": 1,
+  "limit": 20,
+  "total": 0
+}
+```
+
+---
+
+### `DELETE /api/push/{file_id}`
+
+**Description:** Delete a pushed document by its external `file_id`. Removes from Solr, blob storage, and the registry.
+
+**Auth required:** No
+
+**Success Response:** `204 No Content`
+
+| Status | Message |
+|---|---|
+| 404 | File ID not found |
+
+---
+
+### API Sources
+
+---
+
+### `POST /api/sources`
+
+**Description:** Register an external API source configuration.
+
+**Auth required:** No
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | Yes | Source name (1-255 chars) |
+| `description` | string | No | Description |
+| `api_endpoint` | string | Yes | External API URL |
+| `category` | string | No | `federal` (default), `state`, `local`, `forms` |
+| `auth_type` | string | No | `api_key` (default), `bearer`, `basic`, `oauth`, `none` |
+| `api_key` | string | No | API key (stored encrypted) |
+| `oauth_token` | string | No | OAuth token (stored encrypted) |
+| `custom_headers` | object | No | Custom HTTP headers |
+| `fetch_frequency` | string | No | `hourly`, `daily` (default), `weekly`, `monthly` |
+| `max_file_size_mb` | int | No | Max file size 1-500 MB (default 50) |
+
+**Success Response (201):** `ApiSourceResponse` object (credentials masked).
+
+---
+
+### `GET /api/sources`
+
+**Description:** List configured API sources with filtering.
+
+**Auth required:** No
+
+**Query Parameters:**
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `category` | string | No | Filter by category |
+| `status` | string | No | Filter by status |
+| `search` | string | No | Free-text search |
+| `page` | int | No | Page number |
+| `limit` | int | No | Items per page |
+
+**Success Response (200):** `ApiSourceListResponse` -- paginated list.
+
+---
+
+### `GET /api/sources/{source_id}`
+
+**Description:** Get a single API source.
+
+**Auth required:** No
+
+**Success Response (200):** `ApiSourceResponse` object.
+
+| Status | Message |
+|---|---|
+| 400 | Invalid UUID |
+| 404 | Source not found |
+
+---
+
+### `PUT /api/sources/{source_id}`
+
+**Description:** Update an API source configuration.
+
+**Auth required:** No
+
+**Request Body:** `ApiSourceUpdate` -- all fields optional.
+
+**Success Response (200):** Updated `ApiSourceResponse`.
+
+---
+
+### `DELETE /api/sources/{source_id}`
+
+**Description:** Delete an API source.
+
+**Auth required:** No
+
+**Success Response:** `204 No Content`
+
+---
+
+## Database Models
+
+The application uses **PostgreSQL** via **SQLAlchemy 2.0** (async). All models share two common mixins:
+
+- **UUIDMixin**: `id` (UUID primary key, auto-generated)
+- **TimestampMixin**: `created_at`, `updated_at` (auto-managed timestamps)
+
+### `document_registry`
+
+Tracks every document in the system regardless of source.
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | UUID (PK) | Auto-generated primary key |
+| `source_type` | Enum | `upload`, `scrape`, `api` |
+| `processing_status` | Enum | `pending`, `queued`, `processing`, `completed`, `failed` |
+| `processing_error` | Text | Error message if processing failed |
+| `processed_at` | DateTime | When processing completed |
+| `solr_document_id` | String(100) | Linked Solr document ID (unique) |
+| `scrape_url_id` | UUID (FK) | Link to scrape URL source |
+| `scrape_job_id` | UUID (FK) | Link to scrape job |
+| `document_name` | String(255) | Original filename |
+| `title` | String(500) | Document title |
+| `jurisdiction` | String(50) | `federal`, `state`, `local` |
+| `state` | String(50) | US state code |
+| `city` | String(100) | City name |
+| `tax_year` | Integer | Applicable tax year |
+| `governance_state` | String(50) | Current governance state |
+| `doc_type` | String(100) | Document type |
+| `source_url` | Text | Original source URL |
+| `version` | Integer | Document version (default 1) |
+| `is_latest` | Boolean | Whether this is the latest version |
+| `chunk_count` | Integer | Number of chunks in Solr |
+| `external_file_id` | String(255) | External file ID for API-pushed docs (unique) |
+| `needs_review` | Boolean | Flagged for human review |
+| `replaced_at` | DateTime | When this version was replaced |
+| `created_at` | DateTime | Record creation time |
+| `updated_at` | DateTime | Last update time |
+
+### `document_blobs`
+
+Stores references to files in Azure Blob Storage.
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | UUID (PK) | Auto-generated |
+| `document_registry_id` | UUID (FK) | Parent document registry entry |
+| `blob_type` | String(50) | Blob category |
+| `blob_container` | String(100) | Azure container name |
+| `blob_path` | Text | Path within container |
+| `blob_url` | Text | Full blob URL |
+| `original_filename` | String(255) | Original filename |
+| `file_size` | Integer | Size in bytes |
+| `mime_type` | String(100) | MIME type |
+| `content_hash` | String(64) | SHA-256 hash |
+| `version` | Integer | Blob version |
+| `is_current` | Boolean | Current version flag |
+| `created_at` | DateTime | Creation time |
+
+### `scrape_urls`
+
+Configured web scraping sources.
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | UUID (PK) | Auto-generated |
+| `url` | Text | Target URL (unique) |
+| `name` | String(255) | Display name |
+| `description` | Text | Description |
+| `state` | String(50) | State code |
+| `city` | String(100) | City name |
+| `jurisdiction` | String(50) | `federal`, `state`, `local` |
+| `data_source` | Enum | `scrape` or `file` |
+| `delay_between_requests` | Integer | Seconds between requests |
+| `max_requests_per_minute` | Integer | Rate limit |
+| `max_files_per_session` | Integer | Max files per session |
+| `status` | Enum | `active`, `inactive`, `error`, `scraping` |
+| `error_message` | Text | Last error |
+| `documents_count` | Integer | Total docs scraped |
+| `last_scraped_at` | DateTime | Last scrape time |
+| `last_successful_at` | DateTime | Last successful scrape |
+
+### `scrape_jobs`
+
+Individual scrape job runs.
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | UUID (PK) | Auto-generated |
+| `scrape_url_id` | UUID (FK) | Parent URL |
+| `status` | Enum | `pending`, `running`, `completed`, `failed`, `cancelled` |
+| `progress_current` | Integer | Current progress count |
+| `progress_total` | Integer | Total expected |
+| `progress_message` | Text | Human-readable progress |
+| `documents_created` | Integer | Docs created this run |
+| `documents_updated` | Integer | Docs updated this run |
+| `documents_failed` | Integer | Docs failed this run |
+| `chunks_created` | Integer | Chunks created |
+| `started_at` | DateTime | Job start time |
+| `completed_at` | DateTime | Job end time |
+| `duration_seconds` | Integer | Total duration |
+| `error_message` | Text | Error message |
+| `error_details` | JSONB | Structured error details |
+| `triggered_by` | String(50) | Who/what triggered this job |
+
+### `scrape_job_logs`
+
+Per-job log entries.
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | Integer (PK) | Auto-increment |
+| `job_id` | UUID (FK) | Parent job |
+| `level` | Enum | `debug`, `info`, `warning`, `error` |
+| `message` | Text | Log message |
+| `details` | JSONB | Structured details |
+| `created_at` | DateTime | Log timestamp |
+
+### `discovered_pages`
+
+Pages found during site discovery crawls.
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | UUID (PK) | Auto-generated |
+| `scrape_url_id` | UUID (FK) | Parent URL |
+| `url` | Text | Full page URL |
+| `path` | Text | URL path component |
+| `depth` | Integer | Crawl depth from root |
+| `title` | String(500) | Page title |
+| `content_type` | String(100) | HTTP content type |
+| `status` | Enum | `pending`, `approved`, `rejected`, `ingested` |
+| `is_document` | Boolean | Detected as a downloadable document |
+| `http_status` | Integer | HTTP status code |
+| `parent_page_id` | UUID (FK self) | Parent page in crawl tree |
+
+### `path_rules`
+
+Include/exclude rules for URL scraping.
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | UUID (PK) | Auto-generated |
+| `scrape_url_id` | UUID (FK) | Parent URL |
+| `pattern` | Text | Glob or regex pattern |
+| `rule_type` | Enum | `block` or `allow` |
+| `is_regex` | Boolean | Pattern is regex |
+| `is_glob` | Boolean | Pattern is glob |
+| `case_sensitive` | Boolean | Case-sensitive matching |
+| `reason` | Text | Why this rule exists |
+| `source` | Enum | `manual`, `robots_txt`, `auto` |
+| `priority` | Integer | Rule priority |
+| `match_count` | Integer | Number of times matched |
+
+### `api_sources`
+
+External API source configurations.
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | UUID (PK) | Auto-generated |
+| `name` | String(255) | Source name |
+| `description` | Text | Description |
+| `api_endpoint` | Text | External API URL |
+| `category` | Enum | `federal`, `state`, `local`, `forms` |
+| `status` | Enum | `active`, `inactive`, `paused` |
+| `auth_type` | Enum | `api_key`, `bearer`, `basic`, `oauth`, `none` |
+| `api_key_encrypted` | LargeBinary | Encrypted API key |
+| `oauth_token_encrypted` | LargeBinary | Encrypted OAuth token |
+| `custom_headers` | JSON | Custom HTTP headers |
+| `fetch_frequency` | Enum | `hourly`, `daily`, `weekly`, `monthly` |
+| `max_file_size_mb` | Integer | Max file size in MB |
+| `last_fetched_at` | DateTime | Last fetch time |
+| `total_files_pushed` | Integer | Total files received |
+
+### `governance_transitions`
+
+Records of document governance state changes.
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | UUID (PK) | Auto-generated |
+| `document_registry_id` | UUID (FK) | Parent document |
+| `from_state` | String(50) | Previous state |
+| `to_state` | String(50) | New state |
+| `changed_by` | String(255) | Actor |
+| `reason` | Text | Reason for change |
+| `created_at` | DateTime | Transition timestamp |
+
+### `audit_logs`
+
+System-wide audit trail.
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | Integer (PK) | Auto-increment |
+| `actor` | String(255) | Who performed the action |
+| `action` | String(100) | Action type |
+| `resource_type` | String(50) | Resource type (e.g. `document`) |
+| `resource_id` | String(100) | Resource ID |
+| `resource_name` | String(255) | Resource display name |
+| `old_values` | JSONB | Previous values |
+| `new_values` | JSONB | New values |
+| `details` | Text | Additional details |
+| `created_at` | DateTime | Log timestamp |
+
+### `system_settings`
+
+Key-value system configuration store.
+
+| Column | Type | Description |
+|---|---|---|
+| `key` | String(100) PK | Setting key |
+| `value` | JSONB | Setting value |
+| `description` | Text | Setting description |
+| `updated_at` | DateTime | Last updated |
+
+---
+
+## Authentication & Authorization
+
+The API currently has **no authentication or authorization** on any endpoint. All routes are publicly accessible to any client that can reach the server.
+
+- **No** JWT tokens, API keys, session cookies, or OAuth flows are enforced on incoming requests.
+- **CORS middleware** is configured to restrict browser-based cross-origin access to the origins listed in `CORS_ORIGINS`.
+- The `ApiSource` model stores credentials (`api_key`, `oauth_token`) for **outbound** calls to external APIs that the system fetches data from -- these are not used to protect inbound API access.
+- Solr and Azure Blob Storage credentials are server-side configuration and not exposed to API consumers.
+
+> If you are deploying this to production, you should add an authentication layer (e.g. JWT bearer tokens, API key middleware, or an API gateway).
+
+---
+
+## Error Handling
+
+The API uses FastAPI's standard error response patterns:
+
+### Operational Errors (HTTPException)
+
+Raised explicitly in route handlers. Returns:
 
 ```json
 {
-  "docs_stale_over_30_days": 45,
-  "docs_stale_over_1_year": 20,
-  "docs_stale_over_2_years": 5,
-  "urls_scraped_last_7_days": 8,
-  "stale_documents": [
+  "detail": "Human-readable error message"
+}
+```
+
+Common status codes:
+
+| Status | Meaning |
+|---|---|
+| 400 | Bad request / business rule violation |
+| 404 | Resource not found |
+| 413 | Payload too large (file upload) |
+| 500 | Internal server error |
+| 503 | Service unavailable (e.g. Azure not configured) |
+
+### Validation Errors (Pydantic)
+
+Returned automatically by FastAPI when request body or query parameters fail Pydantic validation:
+
+**Status:** `422 Unprocessable Entity`
+
+```json
+{
+  "detail": [
     {
-      "id": "doc-uuid",
-      "name": "old-tax-guide.pdf",
-      "last_updated": "2023-06-15T10:30:00Z",
-      "days_stale": 534,
-      "source_url": "https://example.com/old-guide.pdf"
-    }
-  ],
-  "recent_url_activity": [
-    {
-      "id": "url-uuid",
-      "url": "https://www.irs.gov/forms-pubs",
-      "last_scraped_at": "2024-12-01T10:30:00Z",
-      "status": "active",
-      "documents_count": 150
+      "loc": ["body", "query"],
+      "msg": "String should have at least 1 character",
+      "type": "string_too_short"
     }
   ]
 }
 ```
 
-**Status Codes:**
-- `200` - Success
-- `500` - Server error
+### Health Check
+
+The `/health` endpoint never raises HTTP errors. It returns `200` with a status field:
+- `"healthy"` -- all Solr collections are reachable
+- `"degraded"` -- some collections unreachable
+- `"unhealthy"` -- Solr connection failed entirely (includes `error` field)
 
 ---
 
-#### Scalability Metrics
-
-- **Method:** `GET`
-- **URL:** `/api/dashboard/scalability`
-- **Description:** Returns system scalability metrics including document/chunk/URL counts, job statistics from the last 24 hours, and job success rates.
-
-**Success Response (200):**
-
-```json
-{
-  "total_documents": 500,
-  "total_chunks": 15000,
-  "total_urls": 25,
-  "active_urls": 20,
-  "total_jobs_last_24h": 5,
-  "documents_processed_last_24h": 30,
-  "avg_job_duration_seconds": 120.5,
-  "job_success_rate": 95.0,
-  "documents_by_status": {
-    "indexed": 480,
-    "not_indexed": 20
-  }
-}
-```
-
-**Status Codes:**
-- `200` - Success
-- `500` - Server error
-
----
-
-### Governance Endpoints
-
----
-
-#### Get Governance Logs
-
-- **Method:** `GET`
-- **URL:** `/api/governance/logs`
-- **Description:** Returns paginated governance state change logs across all documents.
-
-**Query Parameters:**
-
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `document_id` | string | No | - | Filter by document ID |
-| `from_state` | string | No | - | Filter by previous state |
-| `to_state` | string | No | - | Filter by new state |
-| `changed_by` | string | No | - | Filter by user |
-| `page` | integer | No | `1` | Page number |
-| `limit` | integer | No | `20` | Items per page (1-100) |
-
-**Success Response (200):**
-
-```json
-{
-  "items": [
-    {
-      "id": "doc-uuid_2024-12-01T10:30:00",
-      "document_id": "doc-uuid",
-      "document_name": "tax-guide-2024.pdf",
-      "from_state": "Under Review",
-      "to_state": "Published",
-      "changed_by": "jane.doe@company.com",
-      "reason": "Approved by compliance team",
-      "timestamp": "2024-12-01T10:30:00Z"
-    }
-  ],
-  "total": 25,
-  "page": 1,
-  "limit": 20,
-  "pages": 2,
-  "has_next": true,
-  "has_prev": false
-}
-```
-
-**Status Codes:**
-- `200` - Success
-- `500` - Server error
-
----
-
-#### Create Governance Log Entry
-
-- **Method:** `POST`
-- **URL:** `/api/governance/logs`
-- **Description:** Creates a governance log entry by updating a document's governance state. Also logs the change in the PostgreSQL audit log.
-
-**Request Body:**
-
-```json
-{
-  "document_id": "doc-uuid",
-  "to_state": "Published",
-  "changed_by": "jane.doe@company.com",
-  "reason": "Reviewed and approved by tax team"
-}
-```
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `document_id` | string | Yes | Document ID |
-| `to_state` | string | Yes | New state: `"Draft"`, `"Under Review"`, `"Published"`, `"Deprecated"`, `"Archived"` |
-| `changed_by` | string | Yes | User who made the change |
-| `reason` | string | No | Reason for the change |
-
-**Success Response (201):**
-
-```json
-{
-  "id": "doc-uuid_2024-12-01T10:30:00",
-  "document_id": "doc-uuid",
-  "document_name": "tax-guide-2024.pdf",
-  "from_state": "Under Review",
-  "to_state": "Published",
-  "changed_by": "jane.doe@company.com",
-  "reason": "Reviewed and approved by tax team",
-  "timestamp": "2024-12-01T10:30:00Z"
-}
-```
-
-**Status Codes:**
-- `201` - Created
-- `404` - Document not found
-- `422` - Validation error
-- `500` - Server error
-
----
-
-#### Get Document Governance History
-
-- **Method:** `GET`
-- **URL:** `/api/governance/logs/{document_id}`
-- **Description:** Returns all governance history entries for a specific document, sorted by timestamp descending.
-
-**Success Response (200):**
-
-```json
-[
-  {
-    "id": "doc-uuid_2024-12-01T10:30:00",
-    "document_id": "doc-uuid",
-    "document_name": "tax-guide-2024.pdf",
-    "from_state": "Under Review",
-    "to_state": "Published",
-    "changed_by": "jane.doe@company.com",
-    "reason": "Approved",
-    "timestamp": "2024-12-01T10:30:00Z"
-  },
-  {
-    "id": "doc-uuid_2024-11-15T08:00:00",
-    "document_id": "doc-uuid",
-    "document_name": "tax-guide-2024.pdf",
-    "from_state": "Draft",
-    "to_state": "Under Review",
-    "changed_by": "john.doe@company.com",
-    "reason": "Ready for review",
-    "timestamp": "2024-11-15T08:00:00Z"
-  }
-]
-```
-
-**Status Codes:**
-- `200` - Success
-- `404` - Document not found
-- `500` - Server error
-
----
-
-### Audit Log Endpoints
-
----
-
-#### List Audit Logs
-
-- **Method:** `GET`
-- **URL:** `/api/audit/logs`
-- **Description:** Lists all audit log entries with filtering and pagination.
-
-**Query Parameters:**
-
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `action` | string | No | - | Filter by action (e.g., `"document.create"`, `"governance.change"`) |
-| `resource_type` | string | No | - | Filter by resource type (`"document"`, `"url"`, etc.) |
-| `resource_id` | string | No | - | Filter by resource ID |
-| `actor` | string | No | - | Filter by actor |
-| `date_from` | datetime | No | - | Filter from date (ISO 8601) |
-| `date_to` | datetime | No | - | Filter to date (ISO 8601) |
-| `search` | string | No | - | Search in details text |
-| `page` | integer | No | `1` | Page number |
-| `limit` | integer | No | `20` | Items per page (1-100) |
-
-**Success Response (200):**
-
-```json
-{
-  "items": [
-    {
-      "id": "123",
-      "action": "document.upload",
-      "resource_type": "document",
-      "resource_id": "doc-uuid",
-      "resource_name": "tax-guide-2024.pdf",
-      "actor": "api",
-      "old_values": null,
-      "new_values": {
-        "filename": "tax-guide-2024.pdf",
-        "file_size": 1024000,
-        "chunks_created": 45
-      },
-      "details": "File processed in background. Chunks: 45",
-      "created_at": "2024-12-01T10:30:00Z"
-    }
-  ],
-  "total": 500,
-  "page": 1,
-  "limit": 20,
-  "pages": 25,
-  "has_next": true,
-  "has_prev": false
-}
-```
-
-**Status Codes:**
-- `200` - Success
-- `500` - Server error
-
----
-
-#### Get Audit Logs for Document
-
-- **Method:** `GET`
-- **URL:** `/api/audit/logs/document/{document_id}`
-- **Description:** Returns all audit log entries for a specific document.
-
-**Path Parameters:**
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `document_id` | string | Yes | Document ID |
-
-**Query Parameters:**
-
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `page` | integer | No | `1` | Page number |
-| `limit` | integer | No | `50` | Items per page (1-100) |
-
-**Success Response (200):** Same shape as list audit logs response.
-
-**Status Codes:**
-- `200` - Success
-- `500` - Server error
-
----
-
-#### Get Governance Audit Logs
-
-- **Method:** `GET`
-- **URL:** `/api/audit/logs/governance`
-- **Description:** Returns audit log entries for governance state changes only.
-
-**Query Parameters:**
-
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `document_id` | string | No | - | Filter by document ID |
-| `actor` | string | No | - | Filter by actor |
-| `page` | integer | No | `1` | Page number |
-| `limit` | integer | No | `20` | Items per page (1-100) |
-
-**Success Response (200):** Same shape as list audit logs response.
-
-**Status Codes:**
-- `200` - Success
-- `500` - Server error
-
----
-
-## Database Schema
-
-All tables use PostgreSQL. UUIDs are used as primary keys (except auto-increment tables noted below). Timestamps use `TIMESTAMPTZ`.
-
----
-
-### `scrape_urls`
-
-Stores web scraping source URL configurations.
-
-| Column | Type | Nullable | Description |
-|---|---|---|---|
-| `id` | UUID | No | Primary key |
-| `url` | TEXT | No | URL to scrape (unique) |
-| `name` | VARCHAR(255) | Yes | Display name |
-| `description` | TEXT | Yes | Description |
-| `category` | VARCHAR(50) | No | Federal / State / Local |
-| `state` | VARCHAR(50) | Yes | State name |
-| `city` | VARCHAR(100) | Yes | City name |
-| `jurisdiction` | VARCHAR(50) | Yes | federal / state / local |
-| `data_source` | ENUM | No | `scrape` or `file` |
-| `schedule_frequency` | ENUM | No | on_demand / daily / weekly / monthly / quarterly / yearly |
-| `next_scheduled_run` | TIMESTAMPTZ | Yes | Next scheduled scrape time |
-| `delay_between_requests` | INTEGER | Yes | Seconds between requests (default: 2) |
-| `max_requests_per_minute` | INTEGER | Yes | Max RPM (default: 30) |
-| `max_files_per_session` | INTEGER | Yes | Max files per session (default: 10000) |
-| `status` | ENUM | No | active / inactive / error / scraping |
-| `error_message` | TEXT | Yes | Last error message |
-| `documents_count` | INTEGER | Yes | Total documents scraped (default: 0) |
-| `last_scraped_at` | TIMESTAMPTZ | Yes | Last scrape time |
-| `last_successful_at` | TIMESTAMPTZ | Yes | Last successful scrape |
-| `created_at` | TIMESTAMPTZ | No | Record creation time |
-| `updated_at` | TIMESTAMPTZ | No | Last update time |
-
-**Relationships:** Has many `ScrapeJob`, `DocumentRegistry`, `DiscoveredPage`, `PathRule`
-
----
-
-### `scrape_jobs`
-
-Tracks individual scraping job executions.
-
-| Column | Type | Nullable | Description |
-|---|---|---|---|
-| `id` | UUID | No | Primary key |
-| `scrape_url_id` | UUID (FK) | No | References `scrape_urls.id` |
-| `status` | ENUM | No | pending / running / completed / failed / cancelled |
-| `progress_current` | INTEGER | Yes | Current progress count |
-| `progress_total` | INTEGER | Yes | Total items to process |
-| `progress_message` | TEXT | Yes | Current progress message |
-| `documents_created` | INTEGER | Yes | Documents successfully created |
-| `documents_updated` | INTEGER | Yes | Documents updated |
-| `documents_failed` | INTEGER | Yes | Documents that failed |
-| `chunks_created` | INTEGER | Yes | Chunks created |
-| `started_at` | TIMESTAMPTZ | Yes | Job start time |
-| `completed_at` | TIMESTAMPTZ | Yes | Job completion time |
-| `duration_seconds` | INTEGER | Yes | Total duration |
-| `error_message` | TEXT | Yes | Error message if failed |
-| `error_details` | JSONB | Yes | Detailed error info |
-| `triggered_by` | VARCHAR(50) | Yes | scheduler / manual / api |
-| `raw_content_blob_path` | TEXT | Yes | Blob path for raw content |
-| `processed_content_blob_path` | TEXT | Yes | Blob path for processed content |
-| `created_at` | TIMESTAMPTZ | Yes | Record creation time |
-
-**Relationships:** Belongs to `ScrapeUrl`, has many `ScrapeJobLog`, `DocumentRegistry`
-
----
-
-### `scrape_job_logs`
-
-Detailed per-step logs for scrape jobs.
-
-| Column | Type | Nullable | Description |
-|---|---|---|---|
-| `id` | INTEGER | No | Auto-increment primary key |
-| `job_id` | UUID (FK) | No | References `scrape_jobs.id` |
-| `level` | ENUM | No | debug / info / warning / error |
-| `message` | TEXT | No | Log message |
-| `details` | JSONB | Yes | Additional details |
-| `created_at` | TIMESTAMPTZ | Yes | Timestamp |
-
----
-
-### `document_registry`
-
-Unified tracking for all documents regardless of source (upload, scrape, or API).
-
-| Column | Type | Nullable | Description |
-|---|---|---|---|
-| `id` | UUID | No | Primary key |
-| `source_type` | ENUM | No | upload / scrape / api |
-| `processing_status` | ENUM | No | pending / processing / completed / failed |
-| `processing_error` | TEXT | Yes | Error message if processing failed |
-| `processed_at` | TIMESTAMPTZ | Yes | When processing completed |
-| `solr_document_id` | VARCHAR(100) | Yes | Reference to Solr document (unique) |
-| `scrape_url_id` | UUID (FK) | Yes | References `scrape_urls.id` |
-| `scrape_job_id` | UUID (FK) | Yes | References `scrape_jobs.id` |
-| `document_name` | VARCHAR(255) | Yes | Document filename |
-| `title` | VARCHAR(500) | Yes | Document title |
-| `jurisdiction` | VARCHAR(50) | Yes | federal / state / local |
-| `state` | VARCHAR(50) | Yes | State code |
-| `city` | VARCHAR(100) | Yes | City name |
-| `tax_year` | INTEGER | Yes | Tax year |
-| `governance_state` | VARCHAR(50) | Yes | Current governance state |
-| `doc_type` | VARCHAR(100) | Yes | Document type |
-| `category` | VARCHAR(100) | Yes | Category |
-| `source_url` | TEXT | Yes | Original source URL |
-| `version` | INTEGER | Yes | Version number (default: 1) |
-| `is_latest` | BOOLEAN | Yes | Is this the latest version |
-| `chunk_count` | INTEGER | Yes | Number of chunks (default: 0) |
-| `external_file_id` | VARCHAR(255) | Yes | External ID from API push (unique) |
-| `needs_review` | BOOLEAN | Yes | Flagged for review (default: false) |
-| `replaced_at` | TIMESTAMPTZ | Yes | When file was last replaced |
-| `created_at` | TIMESTAMPTZ | No | Record creation time |
-| `updated_at` | TIMESTAMPTZ | No | Last update time |
-
-**Relationships:** Belongs to `ScrapeUrl`, `ScrapeJob`. Has many `DocumentBlob`, `GovernanceTransition`
-
----
-
-### `document_blobs`
-
-Blob storage references for document files.
-
-| Column | Type | Nullable | Description |
-|---|---|---|---|
-| `id` | UUID | No | Primary key |
-| `document_registry_id` | UUID (FK) | No | References `document_registry.id` |
-| `blob_type` | VARCHAR(50) | No | raw / processed / chunk |
-| `blob_container` | VARCHAR(100) | No | Azure container name |
-| `blob_path` | TEXT | No | Path within container |
-| `blob_url` | TEXT | Yes | Full Azure Blob URL |
-| `original_filename` | VARCHAR(255) | Yes | Original uploaded filename |
-| `file_size` | INTEGER | Yes | File size in bytes |
-| `mime_type` | VARCHAR(100) | Yes | MIME type |
-| `content_hash` | VARCHAR(64) | Yes | SHA-256 hash for deduplication |
-| `version` | INTEGER | Yes | Version (default: 1) |
-| `is_current` | BOOLEAN | Yes | Is current version (default: true) |
-| `created_at` | TIMESTAMPTZ | Yes | Record creation time |
-
----
-
-### `governance_transitions`
-
-Tracks governance state changes for documents.
-
-| Column | Type | Nullable | Description |
-|---|---|---|---|
-| `id` | UUID | No | Primary key |
-| `document_registry_id` | UUID (FK) | No | References `document_registry.id` |
-| `from_state` | VARCHAR(50) | Yes | Previous state (null for initial) |
-| `to_state` | VARCHAR(50) | No | New state |
-| `changed_by` | VARCHAR(255) | Yes | User who made the change |
-| `reason` | TEXT | Yes | Reason for change |
-| `created_at` | TIMESTAMPTZ | Yes | When the change occurred |
-
----
-
-### `audit_logs`
-
-System-wide audit trail for all actions.
-
-| Column | Type | Nullable | Description |
-|---|---|---|---|
-| `id` | INTEGER | No | Auto-increment primary key |
-| `actor` | VARCHAR(255) | Yes | Who performed the action |
-| `action` | VARCHAR(100) | No | Action type (e.g., `document.create`, `governance.change`) |
-| `resource_type` | VARCHAR(50) | No | Resource type (`document`, `url`, etc.) |
-| `resource_id` | VARCHAR(100) | Yes | Resource ID |
-| `resource_name` | VARCHAR(255) | Yes | Resource display name |
-| `old_values` | JSONB | Yes | Previous values |
-| `new_values` | JSONB | Yes | New values |
-| `details` | TEXT | Yes | Human-readable details |
-| `created_at` | TIMESTAMPTZ | Yes | Timestamp |
-
----
-
-### `discovered_pages`
-
-Pages found during the discovery/crawl phase before ingestion.
-
-| Column | Type | Nullable | Description |
-|---|---|---|---|
-| `id` | UUID | No | Primary key |
-| `scrape_url_id` | UUID (FK) | No | References `scrape_urls.id` |
-| `url` | TEXT | No | Full URL |
-| `path` | TEXT | No | Relative path from base URL |
-| `depth` | INTEGER | Yes | Crawl depth level (default: 0) |
-| `title` | VARCHAR(500) | Yes | Page title |
-| `content_type` | VARCHAR(100) | Yes | MIME type |
-| `content_length` | INTEGER | Yes | Content size in bytes |
-| `status` | ENUM | No | pending / approved / rejected / ingested |
-| `reviewed_at` | TIMESTAMPTZ | Yes | When reviewed |
-| `reviewed_by` | VARCHAR(100) | Yes | Who reviewed |
-| `rejection_reason` | TEXT | Yes | Reason if rejected |
-| `discovered_at` | TIMESTAMPTZ | Yes | When discovered |
-| `discovery_job_id` | UUID | Yes | Which discovery job found this |
-| `http_status` | INTEGER | Yes | HTTP status code |
-| `is_document` | BOOLEAN | Yes | Is a downloadable document |
-| `parent_page_id` | UUID (FK) | Yes | Self-referencing parent page |
-| `created_at` | TIMESTAMPTZ | No | Record creation time |
-| `updated_at` | TIMESTAMPTZ | No | Last update time |
-
----
-
-### `path_rules`
-
-URL path patterns for blocking or allowing during discovery/scraping.
-
-| Column | Type | Nullable | Description |
-|---|---|---|---|
-| `id` | UUID | No | Primary key |
-| `scrape_url_id` | UUID (FK) | No | References `scrape_urls.id` |
-| `pattern` | TEXT | No | Path pattern (e.g., `/login/*`) |
-| `rule_type` | ENUM | No | block / allow |
-| `is_regex` | BOOLEAN | Yes | Pattern is regex (default: false) |
-| `is_glob` | BOOLEAN | Yes | Pattern is glob (default: true) |
-| `case_sensitive` | BOOLEAN | Yes | Case-sensitive (default: false) |
-| `reason` | TEXT | Yes | Why this rule exists |
-| `source` | ENUM | No | manual / robots_txt / auto |
-| `priority` | INTEGER | Yes | Higher = evaluated first (default: 0) |
-| `match_count` | INTEGER | Yes | Times this rule matched (default: 0) |
-| `created_at` | TIMESTAMPTZ | No | Record creation time |
-| `updated_at` | TIMESTAMPTZ | No | Last update time |
-
----
-
-### `api_sources`
-
-External API source configurations for automated data feeds.
-
-| Column | Type | Nullable | Description |
-|---|---|---|---|
-| `id` | UUID | No | Primary key |
-| `name` | VARCHAR(255) | No | Source name |
-| `description` | TEXT | Yes | Description |
-| `api_endpoint` | TEXT | No | External API endpoint URL |
-| `category` | ENUM | No | federal / state / local / forms |
-| `status` | ENUM | No | active / inactive / paused |
-| `auth_type` | ENUM | No | api_key / bearer / basic / oauth / none |
-| `api_key_encrypted` | BYTEA | Yes | Encrypted API key |
-| `oauth_token_encrypted` | BYTEA | Yes | Encrypted OAuth token |
-| `custom_headers` | JSON | Yes | Custom HTTP headers |
-| `fetch_frequency` | ENUM | No | hourly / daily / weekly / monthly |
-| `max_file_size_mb` | INTEGER | Yes | Max file size in MB (default: 50) |
-| `last_fetched_at` | TIMESTAMPTZ | Yes | Last fetch time |
-| `total_files_pushed` | INTEGER | Yes | Total files pushed (default: 0) |
-| `error_message` | TEXT | Yes | Last error message |
-| `created_at` | TIMESTAMPTZ | No | Record creation time |
-| `updated_at` | TIMESTAMPTZ | No | Last update time |
-
----
-
-### `system_settings`
-
-Key-value store for system-wide configuration.
-
-| Column | Type | Nullable | Description |
-|---|---|---|---|
-| `key` | VARCHAR(100) | No | Setting key (primary key) |
-| `value` | JSONB | No | Setting value |
-| `description` | TEXT | Yes | Setting description |
-| `updated_at` | TIMESTAMPTZ | Yes | Last update time |
-
----
-
-### Entity Relationship Diagram
-
-```
-scrape_urls
-  |-- 1:N --> scrape_jobs
-  |             |-- 1:N --> scrape_job_logs
-  |             |-- 1:N --> document_registry
-  |
-  |-- 1:N --> document_registry
-  |             |-- 1:N --> document_blobs
-  |             |-- 1:N --> governance_transitions
-  |
-  |-- 1:N --> discovered_pages (self-referencing via parent_page_id)
-  |
-  |-- 1:N --> path_rules
-
-api_sources (standalone)
-audit_logs (standalone)
-system_settings (standalone)
-```
-
----
-
-## Solr Configuration
-
-### Collections
-
-| Collection | Purpose |
-|---|---|
-| `tax_documents` | Document-level metadata, governance state, and faceting |
-| `tax_chunks` | Chunk-level data with dense vectors for RAG search |
-
-### Key Fields in `tax_documents`
-
-| Field | Description |
-|---|---|
-| `id` | Unique document ID |
-| `name` | Document filename |
-| `title` | Document title |
-| `description` | Document description |
-| `sourceUrl` | Original source URL |
-| `sourceDomain` | Source domain |
-| `tags` | Multivalued tags |
-| `category` | Document category |
-| `docType` | Document type |
-| `jurisdiction` | federal / state / local |
-| `state` | State code |
-| `city` | City name |
-| `taxYear` | Tax year |
-| `taxType` | Tax type |
-| `authorityLevel` | Authority level (1-6) |
-| `governanceState` | Draft / Under Review / Published / Deprecated / Archived |
-| `syncStatus` | synced / syncing / sync_failed |
-| `indexStatus` | indexed / indexing / index_failed / not_indexed |
-| `needsHumanReview` | Boolean review flag |
-| `chunkCount` | Number of chunks |
-| `tokensIndexed` | Total tokens |
-| `uploadedDate` | Upload timestamp |
-| `updatedAt` | Last update |
-| `governanceHistory` | JSON array of governance state changes |
-| `ingestionHistory` | JSON array of ingestion events |
-
-### Key Fields in `tax_chunks`
-
-| Field | Description |
-|---|---|
-| `id` | Unique chunk ID |
-| `documentId` | Parent document ID |
-| `content` | Chunk text content |
-| `vector` | Dense vector embedding (1536 dimensions, `text-embedding-3-small`) |
-| `chunkIndex` | Position within document |
-| `tokenCount` | Number of tokens in chunk |
-| `jurisdiction` | Inherited from parent document |
-| `state` | Inherited from parent |
-| `taxYear` | Inherited from parent |
-| `authorityLevel` | Inherited from parent |
-| `sourceDomain` | Inherited from parent |
-
-### Search Modes
-
-The search service supports three modes:
-
-1. **Hybrid** (default) - Combines BM25 + vector similarity + authority weighting using configurable weights:
-   - `alpha` (BM25 weight): default `0.3`
-   - `beta` (vector weight): default `0.5`
-   - `gamma` (authority weight): default `0.4`
-
-2. **Vector** - Pure dense vector (semantic) search using OpenAI embeddings
-
-3. **BM25** - Pure lexical/keyword search
-
----
-
-## Environment Variables Reference
-
-| Variable | Description | Required | Default |
-|---|---|---|---|
-| **PostgreSQL** | | | |
-| `DATABASE_URL` | PostgreSQL connection string | No | `postgresql://taxkb_user:password@localhost:5432/tax_kb` |
-| `DATABASE_ECHO` | Enable SQL query logging | No | `False` |
-| `DATABASE_POOL_SIZE` | Connection pool size | No | `10` |
-| `DATABASE_MAX_OVERFLOW` | Max overflow connections | No | `20` |
-| **Solr** | | | |
-| `SOLR_BASE_URL` | Solr base URL | No | `http://localhost:8983/solr` |
-| `SOLR_USERNAME` | Solr authentication username | No | `None` |
-| `SOLR_PASSWORD` | Solr authentication password | No | `None` |
-| `SOLR_DOCUMENTS_COLLECTION` | Documents collection name | No | `tax_documents` |
-| `SOLR_CHUNKS_COLLECTION` | Chunks collection name | No | `tax_chunks` |
-| **Azure Blob Storage** | | | |
-| `AZURE_STORAGE_CONNECTION_STRING` | Full Azure connection string | No | `None` |
-| `AZURE_STORAGE_ACCOUNT_NAME` | Azure storage account name | No | `None` |
-| `AZURE_STORAGE_ACCOUNT_KEY` | Azure storage account key | No | `None` |
-| `AZURE_CONTAINER_RAW` | Container for raw documents | No | `raw-documents` |
-| `AZURE_CONTAINER_PROCESSED` | Container for processed docs | No | `processed-documents` |
-| `AZURE_CONTAINER_UPLOADS` | Container for uploaded files | No | `uploads` |
-| `AZURE_CONTAINER_API_PUSHED` | Container for API-pushed files | No | `api-pushed` |
-| **OpenAI** | | | |
-| `OPENAI_API_KEY` | OpenAI API key | Yes | `None` |
-| `EMBEDDING_MODEL` | Embedding model name | No | `text-embedding-3-small` |
-| `EMBEDDING_DIMENSION` | Embedding vector dimension | No | `1536` |
-| **LLM** | | | |
-| `CLASSIFIER_LLM_MODEL` | Model for document classification | No | `gpt-4o-mini` |
-| `CLASSIFIER_LLM_TEMPERATURE` | Temperature for classification | No | `0.1` |
-| `CLASSIFIER_LLM_MAX_TOKENS` | Max tokens for classification | No | `500` |
-| `RAG_LLM_MODEL` | Model for RAG answer generation | No | `gpt-4o-mini` |
-| `RAG_LLM_TEMPERATURE` | Temperature for RAG answers | No | `0.1` |
-| `RAG_LLM_MAX_TOKENS` | Max tokens for RAG answers | No | `1500` |
-| **Search Weights** | | | |
-| `BM25_WEIGHT` | BM25 lexical search weight (alpha) | No | `0.3` |
-| `VECTOR_WEIGHT` | Vector semantic search weight (beta) | No | `0.5` |
-| `AUTHORITY_WEIGHT` | Authority level weight (gamma) | No | `0.4` |
-| **API Server** | | | |
-| `API_HOST` | API host address | No | `0.0.0.0` |
-| `API_PORT` | API port number | No | `8000` |
-| `API_PREFIX` | API route prefix | No | `/api` |
-| `DEBUG` | Enable debug mode | No | `False` |
-| **CORS** | | | |
-| `CORS_ORIGINS` | Allowed CORS origins (JSON array) | No | `["http://localhost:3000", "http://127.0.0.1:3000"]` |
-| `CORS_ALLOW_CREDENTIALS` | Allow credentials | No | `True` |
-| `CORS_ALLOW_METHODS` | Allowed HTTP methods (JSON array) | No | `["*"]` |
-| `CORS_ALLOW_HEADERS` | Allowed HTTP headers (JSON array) | No | `["*"]` |
-| **Pagination** | | | |
-| `DEFAULT_PAGE_SIZE` | Default page size for lists | No | `20` |
-| `MAX_PAGE_SIZE` | Maximum allowed page size | No | `100` |
-| **Scraper** | | | |
-| `SCRAPER_DEFAULT_DELAY` | Default delay between requests (seconds) | No | `2.0` |
-| `SCRAPER_DEFAULT_RPM` | Default requests per minute | No | `30` |
-| `SCRAPER_DEFAULT_TIMEOUT` | Default request timeout (seconds) | No | `30` |
-| `SCRAPER_MAX_FILES_PER_SESSION` | Max files per scrape session | No | `10000` |
-| **File Upload** | | | |
-| `MAX_UPLOAD_SIZE_MB` | Maximum file upload size in MB | No | `50` |
-| `ALLOWED_FILE_EXTENSIONS` | Allowed file extensions (JSON array) | No | `[".pdf", ".doc", ".docx", ".txt", ".xml", ".html", ".htm"]` |
-| `PROCESS_UPLOADS_SYNC` | Process uploads immediately vs background | No | `True` |
-
-### Example `.env` File
-
-```env
-# PostgreSQL
-DATABASE_URL=postgresql://taxkb_user:your_password@localhost:5432/tax_kb
-
-# Solr
-SOLR_BASE_URL=http://localhost:8983/solr
-SOLR_DOCUMENTS_COLLECTION=tax_documents
-SOLR_CHUNKS_COLLECTION=tax_chunks
-
-# Azure Blob Storage
-AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=youraccountname;AccountKey=youraccountkey;EndpointSuffix=core.windows.net
-
-# OpenAI (REQUIRED)
-OPENAI_API_KEY=sk-your-openai-api-key-here
-
-# API Server
-API_HOST=0.0.0.0
-API_PORT=8000
-DEBUG=False
-
-# CORS (add your frontend URL)
-CORS_ORIGINS=["http://localhost:4200"]
-```
+## Deployment Notes
+
+- The API runs on **Uvicorn** and can be deployed behind any reverse proxy (Nginx, Traefik, etc.).
+- **Celery workers** must be started separately for background scraping and document processing tasks.
+- **Redis** is required as the Celery message broker and result backend.
+- **PostgreSQL** tables are auto-created on startup via `init_db()` in the lifespan handler. Use **Alembic** for production migrations.
+- **Azure Blob Storage** is optional for local development but required for file upload/push functionality.
+- **Solr** must have `tax_documents` and `tax_chunks` collections created and configured before the API can index documents.
+- The application is designed to run at `http://0.0.0.0:8001` by default; override with `API_HOST` and `API_PORT` environment variables.
