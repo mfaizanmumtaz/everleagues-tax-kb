@@ -215,14 +215,20 @@ class ChunkService:
             chunks_needing_embeddings = [
                 (i, chunk)
                 for i, chunk in enumerate(request.chunks)
-                if not chunk.vector and chunk.content
+                if not chunk.vector and chunk.content and chunk.content.strip()
             ]
 
             if chunks_needing_embeddings:
                 logger.debug("Generating embeddings for %d chunks", len(chunks_needing_embeddings))
                 texts = [chunk.content for _, chunk in chunks_needing_embeddings]
                 embeddings = await self.embeddings.generate_embeddings(texts)
-                for (i, chunk), embedding in zip(chunks_needing_embeddings, embeddings):
+                
+                if len(embeddings) != len(chunks_needing_embeddings):
+                    raise RuntimeError(
+                        f"Embedding count mismatch: expected {len(chunks_needing_embeddings)}, got {len(embeddings)}"
+                    )
+                
+                for (i, _), embedding in zip(chunks_needing_embeddings, embeddings):
                     request.chunks[i].vector = embedding
                 logger.debug("Embeddings generated successfully")
 
