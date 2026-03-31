@@ -5,7 +5,12 @@
             "cities": [
                 "Birmingham",
                 "Montgomery",
-                "Mobile"
+                "Mobile",
+                "Huntsville",
+                "Tuscaloosa",
+                "Hoover",
+                "Bessemer",
+                "Gadsden"
             ]
         },
         "AK": {
@@ -13,7 +18,9 @@
             "cities": [
                 "Anchorage",
                 "Fairbanks",
-                "Juneau"
+                "Juneau",
+                "Wasilla",
+                "Sitka"
             ]
         },
         "AZ": {
@@ -22,7 +29,11 @@
                 "Phoenix",
                 "Tucson",
                 "Mesa",
-                "Scottsdale"
+                "Chandler",
+                "Scottsdale",
+                "Glendale",
+                "Gilbert",
+                "Tempe"
             ]
         },
         "AR": {
@@ -30,7 +41,10 @@
             "cities": [
                 "Little Rock",
                 "Fort Smith",
-                "Fayetteville"
+                "Fayetteville",
+                "Springdale",
+                "Jonesboro",
+                "North Little Rock"
             ]
         },
         "CA": {
@@ -40,7 +54,16 @@
                 "San Francisco",
                 "San Diego",
                 "San Jose",
-                "Sacramento"
+                "Sacramento",
+                "Fresno",
+                "Long Beach",
+                "Oakland",
+                "Bakersfield",
+                "Anaheim",
+                "Santa Ana",
+                "Riverside",
+                "Stockton",
+                "Irvine"
             ]
         },
         "CO": {
@@ -49,16 +72,28 @@
                 "Denver",
                 "Colorado Springs",
                 "Aurora",
-                "Boulder"
+                "Boulder",
+                "Fort Collins",
+                "Lakewood",
+                "Thornton",
+                "Arvada",
+                "Pueblo",
+                "Glendale",
+                "Greenwood Village",
+                "Sheridan"
             ]
         },
         "CT": {
             "name": "Connecticut",
             "cities": [
-                "Hartford",
+                "Bridgeport",
                 "New Haven",
+                "Hartford",
                 "Stamford",
-                "Bridgeport"
+                "Waterbury",
+                "Norwalk",
+                "Danbury",
+                "New Britain"
             ]
         },
         "DE": {
@@ -66,25 +101,37 @@
             "cities": [
                 "Wilmington",
                 "Dover",
-                "Newark"
+                "Newark",
+                "Middletown",
+                "Bear"
             ]
         },
         "FL": {
             "name": "Florida",
             "cities": [
+                "Jacksonville",
                 "Miami",
-                "Orlando",
                 "Tampa",
-                "Jacksonville"
+                "Orlando",
+                "St. Petersburg",
+                "Hialeah",
+                "Fort Lauderdale",
+                "Tallahassee",
+                "Cape Coral",
+                "Port St. Lucie"
             ]
         },
         "GA": {
             "name": "Georgia",
             "cities": [
                 "Atlanta",
-                "Savannah",
                 "Augusta",
-                "Columbus"
+                "Columbus",
+                "Savannah",
+                "Athens",
+                "Sandy Springs",
+                "Macon",
+                "Roswell"
             ]
         },
         "HI": {
@@ -92,7 +139,10 @@
             "cities": [
                 "Honolulu",
                 "Pearl City",
-                "Hilo"
+                "Hilo",
+                "Kailua",
+                "Waipahu",
+                "Kaneohe"
             ]
         },
         "ID": {
@@ -100,7 +150,10 @@
             "cities": [
                 "Boise",
                 "Meridian",
-                "Nampa"
+                "Nampa",
+                "Idaho Falls",
+                "Caldwell",
+                "Pocatello"
             ]
         },
         "IL": {
@@ -109,7 +162,11 @@
                 "Chicago",
                 "Aurora",
                 "Naperville",
-                "Springfield"
+                "Springfield",
+                "Joliet",
+                "Rockford",
+                "Elgin",
+                "Peoria"
             ]
         },
         "IN": {
@@ -117,7 +174,14 @@
             "cities": [
                 "Indianapolis",
                 "Fort Wayne",
-                "Evansville"
+                "Evansville",
+                "South Bend",
+                "Carmel",
+                "Fishers",
+                "Bloomington",
+                "Hammond",
+                "Gary",
+                "Lafayette"
             ]
         },
         "IA": {
@@ -125,7 +189,11 @@
             "cities": [
                 "Des Moines",
                 "Cedar Rapids",
-                "Davenport"
+                "Davenport",
+                "Sioux City",
+                "Iowa City",
+                "Waterloo",
+                "Ames"
             ]
         },
         "KS": {
@@ -134,7 +202,10 @@
                 "Wichita",
                 "Overland Park",
                 "Kansas City",
-                "Topeka"
+                "Topeka",
+                "Olathe",
+                "Lawrence",
+                "Shawnee"
             ]
         },
         "KY": {
@@ -142,7 +213,14 @@
             "cities": [
                 "Louisville",
                 "Lexington",
-                "Bowling Green"
+                "Bowling Green",
+                "Owensboro",
+                "Covington",
+                "Richmond",
+                "Florence",
+                "Georgetown",
+                "Newport",
+                "Frankfort"
             ]
         },
         "LA": {
@@ -150,7 +228,11 @@
             "cities": [
                 "New Orleans",
                 "Baton Rouge",
-                "Shreveport"
+                "Shreveport",
+                "Metairie",
+                "Lafayette",
+                "Lake Charles",
+                "Kenner"
             ]
         },
         "ME": {
@@ -158,7 +240,10 @@
             "cities": [
                 "Portland",
                 "Lewiston",
-                "Bangor"
+                "Bangor",
+                "South Portland",
+                "Auburn",
+                "Augusta"
             ]
         },
         "MD": {
@@ -167,7 +252,12 @@
                 "Baltimore",
                 "Frederick",
                 "Rockville",
-                "Annapolis"
+                "Annapolis",
+                "Columbia",
+                "Germantown",
+                "Silver Spring",
+                "Gaithersburg",
+                "Bowie"
             ]
         },
         "MA": {
@@ -176,7 +266,13 @@
                 "Boston",
                 "Worcester",
                 "Springfield",
-                "Cambridge"
+                "Cambridge",
+                "Lowell",
+                "Brockton",
+                "New Bedford",
+                "Quincy",
+                "Lynn",
+                "Fall River"
             ]
         },
         "MI": {
@@ -185,7 +281,19 @@
                 "Detroit",
                 "Grand Rapids",
                 "Ann Arbor",
-                "Lansing"
+                "Lansing",
+                "Warren",
+                "Sterling Heights",
+                "Flint",
+                "Dearborn",
+                "Saginaw",
+                "Pontiac",
+                "Battle Creek",
+                "Muskegon",
+                "Highland Park",
+                "Port Huron",
+                "East Lansing",
+                "Jackson"
             ]
         },
         "MN": {
@@ -194,7 +302,10 @@
                 "Minneapolis",
                 "Saint Paul",
                 "Rochester",
-                "Duluth"
+                "Duluth",
+                "Bloomington",
+                "Brooklyn Park",
+                "Plymouth"
             ]
         },
         "MS": {
@@ -202,7 +313,10 @@
             "cities": [
                 "Jackson",
                 "Gulfport",
-                "Hattiesburg"
+                "Hattiesburg",
+                "Southaven",
+                "Biloxi",
+                "Meridian"
             ]
         },
         "MO": {
@@ -211,7 +325,12 @@
                 "Kansas City",
                 "St. Louis",
                 "Springfield",
-                "Columbia"
+                "Columbia",
+                "Independence",
+                "Lee's Summit",
+                "O'Fallon",
+                "St. Joseph",
+                "Jefferson City"
             ]
         },
         "MT": {
@@ -220,7 +339,10 @@
                 "Billings",
                 "Missoula",
                 "Great Falls",
-                "Helena"
+                "Helena",
+                "Bozeman",
+                "Butte",
+                "Kalispell"
             ]
         },
         "NE": {
@@ -228,7 +350,10 @@
             "cities": [
                 "Omaha",
                 "Lincoln",
-                "Bellevue"
+                "Bellevue",
+                "Grand Island",
+                "Kearney",
+                "Fremont"
             ]
         },
         "NV": {
@@ -237,7 +362,9 @@
                 "Las Vegas",
                 "Henderson",
                 "Reno",
-                "Carson City"
+                "Carson City",
+                "North Las Vegas",
+                "Sparks"
             ]
         },
         "NH": {
@@ -245,7 +372,10 @@
             "cities": [
                 "Manchester",
                 "Nashua",
-                "Concord"
+                "Concord",
+                "Dover",
+                "Rochester",
+                "Keene"
             ]
         },
         "NJ": {
@@ -254,7 +384,13 @@
                 "Newark",
                 "Jersey City",
                 "Paterson",
-                "Trenton"
+                "Trenton",
+                "Elizabeth",
+                "Clifton",
+                "Camden",
+                "Passaic",
+                "Edison",
+                "Woodbridge"
             ]
         },
         "NM": {
@@ -262,7 +398,9 @@
             "cities": [
                 "Albuquerque",
                 "Las Cruces",
-                "Santa Fe"
+                "Santa Fe",
+                "Rio Rancho",
+                "Roswell"
             ]
         },
         "NY": {
@@ -272,7 +410,12 @@
                 "Buffalo",
                 "Rochester",
                 "Albany",
-                "Syracuse"
+                "Syracuse",
+                "Yonkers",
+                "New Rochelle",
+                "Mount Vernon",
+                "Schenectady",
+                "White Plains"
             ]
         },
         "NC": {
@@ -281,7 +424,13 @@
                 "Charlotte",
                 "Raleigh",
                 "Greensboro",
-                "Durham"
+                "Durham",
+                "Winston-Salem",
+                "Fayetteville",
+                "Cary",
+                "Wilmington",
+                "High Point",
+                "Asheville"
             ]
         },
         "ND": {
@@ -289,7 +438,9 @@
             "cities": [
                 "Fargo",
                 "Bismarck",
-                "Grand Forks"
+                "Grand Forks",
+                "Minot",
+                "West Fargo"
             ]
         },
         "OH": {
@@ -298,7 +449,16 @@
                 "Columbus",
                 "Cleveland",
                 "Cincinnati",
-                "Toledo"
+                "Toledo",
+                "Akron",
+                "Dayton",
+                "Youngstown",
+                "Canton",
+                "Parma",
+                "Lorain",
+                "Hamilton",
+                "Springfield",
+                "Mansfield"
             ]
         },
         "OK": {
@@ -306,7 +466,10 @@
             "cities": [
                 "Oklahoma City",
                 "Tulsa",
-                "Norman"
+                "Norman",
+                "Broken Arrow",
+                "Edmond",
+                "Lawton"
             ]
         },
         "OR": {
@@ -315,7 +478,11 @@
                 "Portland",
                 "Salem",
                 "Eugene",
-                "Bend"
+                "Bend",
+                "Gresham",
+                "Hillsboro",
+                "Beaverton",
+                "Medford"
             ]
         },
         "PA": {
@@ -324,7 +491,13 @@
                 "Philadelphia",
                 "Pittsburgh",
                 "Allentown",
-                "Harrisburg"
+                "Harrisburg",
+                "Erie",
+                "Reading",
+                "Scranton",
+                "Bethlehem",
+                "Lancaster",
+                "York"
             ]
         },
         "RI": {
@@ -332,7 +505,10 @@
             "cities": [
                 "Providence",
                 "Warwick",
-                "Cranston"
+                "Cranston",
+                "Pawtucket",
+                "East Providence",
+                "Woonsocket"
             ]
         },
         "SC": {
@@ -340,7 +516,11 @@
             "cities": [
                 "Charleston",
                 "Columbia",
-                "Greenville"
+                "Greenville",
+                "North Charleston",
+                "Mount Pleasant",
+                "Rock Hill",
+                "Spartanburg"
             ]
         },
         "SD": {
@@ -348,7 +528,10 @@
             "cities": [
                 "Sioux Falls",
                 "Rapid City",
-                "Pierre"
+                "Pierre",
+                "Aberdeen",
+                "Brookings",
+                "Watertown"
             ]
         },
         "TN": {
@@ -357,7 +540,11 @@
                 "Nashville",
                 "Memphis",
                 "Knoxville",
-                "Chattanooga"
+                "Chattanooga",
+                "Clarksville",
+                "Murfreesboro",
+                "Franklin",
+                "Jackson"
             ]
         },
         "TX": {
@@ -367,7 +554,16 @@
                 "Dallas",
                 "Austin",
                 "San Antonio",
-                "Fort Worth"
+                "Fort Worth",
+                "El Paso",
+                "Arlington",
+                "Corpus Christi",
+                "Plano",
+                "Laredo",
+                "Lubbock",
+                "Irving",
+                "Garland",
+                "Frisco"
             ]
         },
         "UT": {
@@ -376,7 +572,11 @@
                 "Salt Lake City",
                 "Provo",
                 "West Valley City",
-                "Ogden"
+                "Ogden",
+                "West Jordan",
+                "Sandy",
+                "St. George",
+                "Orem"
             ]
         },
         "VT": {
@@ -384,7 +584,10 @@
             "cities": [
                 "Burlington",
                 "Montpelier",
-                "Rutland"
+                "Rutland",
+                "South Burlington",
+                "Essex Junction",
+                "Barre"
             ]
         },
         "VA": {
@@ -393,7 +596,13 @@
                 "Virginia Beach",
                 "Norfolk",
                 "Richmond",
-                "Arlington"
+                "Arlington",
+                "Chesapeake",
+                "Newport News",
+                "Alexandria",
+                "Hampton",
+                "Roanoke",
+                "Lynchburg"
             ]
         },
         "WA": {
@@ -402,7 +611,12 @@
                 "Seattle",
                 "Spokane",
                 "Tacoma",
-                "Olympia"
+                "Olympia",
+                "Vancouver",
+                "Bellevue",
+                "Kent",
+                "Everett",
+                "Renton"
             ]
         },
         "WV": {
@@ -410,7 +624,10 @@
             "cities": [
                 "Charleston",
                 "Huntington",
-                "Morgantown"
+                "Morgantown",
+                "Parkersburg",
+                "Wheeling",
+                "Martinsburg"
             ]
         },
         "WI": {
@@ -418,7 +635,11 @@
             "cities": [
                 "Milwaukee",
                 "Madison",
-                "Green Bay"
+                "Green Bay",
+                "Kenosha",
+                "Racine",
+                "Appleton",
+                "Waukesha"
             ]
         },
         "WY": {
@@ -426,7 +647,10 @@
             "cities": [
                 "Cheyenne",
                 "Casper",
-                "Laramie"
+                "Laramie",
+                "Gillette",
+                "Rock Springs",
+                "Sheridan"
             ]
         },
         "DC": {
@@ -440,21 +664,44 @@
             "cities": [
                 "San Juan",
                 "Bayamon",
-                "Carolina"
+                "Carolina",
+                "Ponce",
+                "Caguas",
+                "Guaynabo"
             ]
         },
         "VI": {
             "name": "U.S. Virgin Islands",
             "cities": [
                 "Charlotte Amalie",
-                "Christiansted"
+                "Christiansted",
+                "Frederiksted",
+                "Cruz Bay"
             ]
         },
         "GU": {
             "name": "Guam",
             "cities": [
                 "Hagatna",
-                "Dededo"
+                "Dededo",
+                "Yigo",
+                "Tamuning"
+            ]
+        },
+        "AS": {
+            "name": "American Samoa",
+            "cities": [
+                "Pago Pago",
+                "Tafuna",
+                "Leone"
+            ]
+        },
+        "MP": {
+            "name": "Northern Mariana Islands",
+            "cities": [
+                "Saipan",
+                "Tinian",
+                "Rota"
             ]
         }
     },
