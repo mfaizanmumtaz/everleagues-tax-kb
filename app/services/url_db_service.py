@@ -55,7 +55,6 @@ class UrlDbService:
             url=url,
             name=name,
             description=description,
-            category=None,
             state=state,
             city=city,
             jurisdiction=jurisdiction.lower(),
@@ -87,7 +86,6 @@ class UrlDbService:
 
     async def list_urls(
         self,
-        category: Optional[str] = None,
         state: Optional[str] = None,
         status: Optional[UrlStatus] = None,
         data_source: Optional[DataSourceType] = None,
@@ -104,8 +102,6 @@ class UrlDbService:
         # Build conditions list
         conditions = []
 
-        if category:
-            conditions.append(ScrapeUrl.category == category)
         if state:
             conditions.append(ScrapeUrl.state == state)
         if status:
@@ -266,7 +262,6 @@ class UrlDbService:
             "url": scrape_url.url,
             "name": scrape_url.name,
             "description": scrape_url.description,
-            "category": scrape_url.category,
             "state": scrape_url.state,
             "city": scrape_url.city,
             "jurisdiction": scrape_url.jurisdiction,

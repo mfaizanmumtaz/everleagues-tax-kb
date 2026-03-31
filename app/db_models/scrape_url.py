@@ -41,12 +41,9 @@ class ScrapeUrl(Base, UUIDMixin, TimestampMixin):
     description = Column(Text)
 
     # Classification
-    category = Column(
-        String(50), nullable=False, default="Federal", index=True
-    )  # Federal, State, Local
     state = Column(String(50), index=True)  # State name (California, New York, etc.)
     city = Column(String(100), index=True)  # City name for local-level documents
-    jurisdiction = Column(String(50))  # federal, state, local
+    jurisdiction = Column(String(50), nullable=False, default="federal", index=True)  # federal, state, local
 
     # Data Source Configuration
     data_source = Column(

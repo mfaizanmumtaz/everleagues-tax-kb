@@ -32,8 +32,8 @@ class URLBase(BaseModel):
     """Base URL fields."""
 
     url: str = Field(..., description="URL to scrape")
-    category: str = Field(
-        default="Federal", description="Category (Federal/State/Local)"
+    jurisdiction: str = Field(
+        default="federal", description="Jurisdiction level (federal/state/local)"
     )
     state: Optional[str] = Field(
         default=None, description="State code if state-level or local-level"
@@ -65,7 +65,7 @@ class URLUpdate(BaseModel):
 
     url: Optional[str] = None
     name: Optional[str] = None
-    category: Optional[str] = None
+    jurisdiction: Optional[str] = None
     state: Optional[str] = None
     city: Optional[str] = None
     data_source: Optional[DataSource] = None
@@ -81,7 +81,7 @@ class URLResponse(BaseModel):
     id: str
     url: str
     name: Optional[str] = None
-    category: str = "Federal"
+    jurisdiction: str = "federal"
     state: Optional[str] = None
     city: Optional[str] = None
     data_source: str = "scrape"

@@ -76,7 +76,6 @@ def _get_redis() -> redis_lib.Redis:
 
 @router.get("", response_model=URLListResponse)
 async def list_urls(
-    category: Optional[str] = Query(default=None, description="Filter by category"),
     state: Optional[str] = Query(default=None, description="Filter by state"),
     status: Optional[URLStatus] = Query(default=None, description="Filter by status"),
     data_source: Optional[DataSource] = Query(
@@ -98,7 +97,6 @@ async def list_urls(
         db_data_source = _map_data_source(data_source) if data_source else None
 
         urls, total = await url_service.list_urls(
-            category=category,
             state=state,
             status=db_status,
             data_source=db_data_source,
@@ -167,7 +165,7 @@ async def create_url(
             url=url_data.url,
             name=url_data.name,
             description=url_data.description,
-            jurisdiction=url_data.category,  # Frontend sends 'category', backend stores as 'jurisdiction'
+            jurisdiction=url_data.jurisdiction,
             state=url_data.state,
             city=url_data.city,
             data_source=_map_data_source(url_data.data_source),
@@ -181,7 +179,7 @@ async def create_url(
             url_id=str(scrape_url.id),
             url=scrape_url.url,
             values={
-                "category": url_data.category,
+                "jurisdiction": url_data.jurisdiction,
                 "data_source": url_data.data_source.value,
             },
         )
