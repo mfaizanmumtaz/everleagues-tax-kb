@@ -188,13 +188,6 @@ class DocumentListResponse(BaseModel):
     has_prev: bool
 
 
-class ReprocessRequest(BaseModel):
-    """Request model for reprocessing a document."""
-
-    force: bool = Field(
-        default=False,
-        description="Force reprocess even if document is not in failed state",
-    )
 
 
 class ReprocessResponse(BaseModel):

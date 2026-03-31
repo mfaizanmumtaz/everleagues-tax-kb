@@ -10,7 +10,6 @@ from ..models.document import (
     DocumentResponse,
     DocumentListResponse,
     GovernanceStateUpdate,
-    ReprocessRequest,
     ReprocessResponse,
     BulkReprocessResponse,
 )
@@ -296,15 +295,13 @@ async def update_governance_state(
 @router.post("/{document_id}/reprocess", response_model=ReprocessResponse)
 async def reprocess_document(
     document_id: str = Path(..., description="Document ID (Solr ID)"),
-    request: ReprocessRequest = ReprocessRequest(),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Reprocess a failed document.
 
     Re-queues the document for processing through the ingestion pipeline.
-    The document must have a failed status (sync_failed or index_failed)
-    unless force=true is specified.
+    The document must have a failed status (sync_failed or index_failed).
     """
     try:
         doc_service = get_document_service()
@@ -315,16 +312,16 @@ async def reprocess_document(
         if not doc:
             raise HTTPException(status_code=404, detail="Document not found")
 
-        # Check if document is in failed state (unless force=true)
+        # Check if document is in failed state
         is_failed = (
             doc.sync_status.value == "sync_failed"
             or doc.index_status.value == "index_failed"
         )
-        if not is_failed and not request.force:
+        if not is_failed:
             return ReprocessResponse(
                 registry_id="",
                 status="not_failed",
-                message="Document is not in failed state. Use force=true to reprocess anyway.",
+                message="Document is not in failed state.",
             )
 
         # Get registry entry with blob
