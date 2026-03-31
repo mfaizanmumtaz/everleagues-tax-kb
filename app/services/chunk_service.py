@@ -220,15 +220,11 @@ class ChunkService:
 
             if chunks_needing_embeddings:
                 logger.debug("Generating embeddings for %d chunks", len(chunks_needing_embeddings))
-                try:
-                    texts = [chunk.content for _, chunk in chunks_needing_embeddings]
-                    embeddings = await self.embeddings.generate_embeddings(texts)
-                    for (i, chunk), embedding in zip(chunks_needing_embeddings, embeddings):
-                        request.chunks[i].vector = embedding
-                    logger.debug("Embeddings generated successfully")
-                except Exception as e:
-                    logger.warning("Embedding generation failed for bulk chunks: %s", e)
-                    errors.append(f"Embedding generation failed: {str(e)}")
+                texts = [chunk.content for _, chunk in chunks_needing_embeddings]
+                embeddings = await self.embeddings.generate_embeddings(texts)
+                for (i, chunk), embedding in zip(chunks_needing_embeddings, embeddings):
+                    request.chunks[i].vector = embedding
+                logger.debug("Embeddings generated successfully")
 
         for chunk in request.chunks:
             try:
