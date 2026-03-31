@@ -53,10 +53,6 @@ class ChunkService:
         if filters.tax_year:
             fq.append(f"taxYear:{filters.tax_year}")
 
-        if filters.category:
-            categories = " OR ".join(filters.category)
-            fq.append(f"category:({categories})")
- 
         if filters.authority_level:
             fq.append(f"authorityLevel:{filters.authority_level}")
 
@@ -83,7 +79,6 @@ class ChunkService:
             title=doc.get("title"),
             source_url=doc.get("sourceUrl"),
             source_domain=doc.get("sourceDomain"),
-            category=doc.get("category"),
             doc_type=doc.get("docType"),
             # Tax fields
             tax_year=doc.get("taxYear"),
@@ -123,7 +118,6 @@ class ChunkService:
             "title": chunk.title,
             "sourceUrl": chunk.source_url,
             "sourceDomain": chunk.source_domain,
-            "category": chunk.category,
             "docType": chunk.doc_type,
             # Tax fields
             "taxYear": chunk.tax_year,
@@ -280,7 +274,6 @@ class ChunkService:
             "title": "title",
             "source_url": "sourceUrl",
             "source_domain": "sourceDomain",
-            "category": "category",
             "doc_type": "docType",
             "tax_year": "taxYear",
             "tax_type": "taxType",

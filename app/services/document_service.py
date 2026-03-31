@@ -56,10 +56,6 @@ class DocumentService:
         if filters.tax_year:
             fq.append(f"taxYear:{filters.tax_year}")
 
-        if filters.category:
-            categories = " OR ".join(filters.category)
-            fq.append(f"category:({categories})")
-
         if filters.authority_level:
             fq.append(f"authorityLevel:{filters.authority_level}")
 
@@ -113,7 +109,6 @@ class DocumentService:
             source_url=doc.get("sourceUrl"),
             source_domain=doc.get("sourceDomain"),
             tags=doc.get("tags", []),
-            category=doc.get("category"),
             doc_type=doc.get("docType"),
             form_family=doc.get("formFamily"),
             size=doc.get("size"),
@@ -187,7 +182,6 @@ class DocumentService:
             "sourceUrl": doc.source_url,
             "sourceDomain": doc.source_domain,
             "tags": doc.tags,
-            "category": doc.category,
             "docType": doc.doc_type,
             "formFamily": doc.form_family,
             "size": doc.size,
@@ -282,7 +276,6 @@ class DocumentService:
             "title": "title",
             "description": "description",
             "tags": "tags",
-            "category": "category",
             "doc_type": "docType",
             "form_family": "formFamily",
             "tax_year": "taxYear",

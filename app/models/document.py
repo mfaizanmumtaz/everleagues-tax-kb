@@ -42,7 +42,6 @@ class DocumentBase(BaseModel):
     source_url: Optional[str] = Field(default=None, description="Source URL")
     source_domain: Optional[str] = Field(default=None, description="Source domain")
     tags: List[str] = Field(default_factory=list, description="Document tags")
-    category: Optional[str] = Field(default=None, description="Document category")
     doc_type: Optional[str] = Field(default=None, description="Document type")
 
     # Tax-specific fields
@@ -93,7 +92,6 @@ class DocumentUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     tags: Optional[List[str]] = None
-    category: Optional[str] = None
     doc_type: Optional[str] = None
     tax_year: Optional[int] = None
     tax_type: Optional[str] = None

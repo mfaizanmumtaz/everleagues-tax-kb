@@ -80,7 +80,6 @@ class DocumentRegistry(Base, UUIDMixin, TimestampMixin):
     tax_year = Column(Integer, index=True)
     governance_state = Column(String(50), index=True)
     doc_type = Column(String(100))
-    category = Column(String(100))
 
     # Source URL for reference
     source_url = Column(Text)

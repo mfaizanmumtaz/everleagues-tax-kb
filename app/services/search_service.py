@@ -53,10 +53,6 @@ class SearchService:
         if filters.tax_year:
             fq.append(f"taxYear:{filters.tax_year}")
 
-        if filters.category:
-            categories = " OR ".join(filters.category)
-            fq.append(f"category:({categories})")
-
         if filters.authority_level:
             fq.append(f"authorityLevel:{filters.authority_level}")
 
@@ -192,7 +188,6 @@ class SearchService:
                 doc_map[doc_id] = SourceDocument(
                     id=doc_id,
                     title=chunk.document_name,
-                    category=None,
                     jurisdiction=chunk.jurisdiction,
                     url=chunk.source_url,
                     excerpt=chunk.content[:200] + "..."

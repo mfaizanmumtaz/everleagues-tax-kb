@@ -272,7 +272,6 @@ async def _run_pipeline(
                 if meta.get("tags")
                 else (classification.tags if classification else [])
             ),
-            category=meta.get("category"),
             doc_type=(
                 meta.get("doc_type")
                 or (classification.doc_type if classification else None)

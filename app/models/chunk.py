@@ -17,7 +17,6 @@ class ChunkBase(BaseModel):
     title: Optional[str] = Field(default=None, description="Parent document title")
     source_url: Optional[str] = Field(default=None, description="Source URL")
     source_domain: Optional[str] = Field(default=None, description="Source domain")
-    category: Optional[str] = Field(default=None, description="Document category")
     doc_type: Optional[str] = Field(default=None, description="Document type")
     
     # Tax-specific denormalized fields
@@ -56,7 +55,6 @@ class ChunkUpdate(BaseModel):
     title: Optional[str] = None
     source_url: Optional[str] = None
     source_domain: Optional[str] = None
-    category: Optional[str] = None
     doc_type: Optional[str] = None
     tax_year: Optional[int] = None
     tax_type: Optional[str] = None

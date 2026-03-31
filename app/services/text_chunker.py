@@ -113,7 +113,6 @@ class TextChunker:
                 title=document.title if document else None,
                 source_url=document.source_url if document else None,
                 source_domain=document.source_domain if document else None,
-                category=document.category if document else None,
                 doc_type=document.doc_type if document else None,
                 tax_year=document.tax_year if document else None,
                 tax_type=document.tax_type if document else None,

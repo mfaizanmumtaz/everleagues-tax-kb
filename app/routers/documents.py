@@ -35,9 +35,6 @@ async def list_documents(
     state: Optional[str] = Query(default=None, description="Filter by state"),
     city: Optional[str] = Query(default=None, description="Filter by city"),
     tax_year: Optional[int] = Query(default=None, description="Filter by tax year"),
-    category: Optional[List[str]] = Query(
-        default=None, description="Filter by category"
-    ),
     authority_level: Optional[int] = Query(
         default=None, ge=1, le=6, description="Filter by authority level"
     ),
@@ -69,7 +66,6 @@ async def list_documents(
             state=state,
             city=city,
             tax_year=tax_year,
-            category=category,
             authority_level=authority_level,
             governance_state=governance_state,
             doc_type=doc_type,

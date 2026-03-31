@@ -88,7 +88,6 @@ class SourceDocument(BaseModel):
 
     id: str
     title: str
-    category: Optional[str] = None
     jurisdiction: Optional[str] = None
     url: Optional[str] = None
     excerpt: Optional[str] = None
