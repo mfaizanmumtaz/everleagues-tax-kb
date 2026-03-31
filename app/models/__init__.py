@@ -33,7 +33,6 @@ from .discovery import (
 )
 from .urls import (
     DataSource,
-    ScheduleFrequency,
     URLStatus,
     URLBase,
     URLCreate,
@@ -113,7 +112,6 @@ __all__ = [
     "SiteTreeNode",
     # URLs
     "DataSource",
-    "ScheduleFrequency",
     "URLStatus",
     "URLBase",
     "URLCreate",

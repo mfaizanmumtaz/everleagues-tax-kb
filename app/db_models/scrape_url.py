@@ -21,17 +21,6 @@ class DataSourceType(str, enum.Enum):
     FILE = "file"
 
 
-class ScheduleFrequency(str, enum.Enum):
-    """Schedule frequency enumeration."""
-
-    ON_DEMAND = "on_demand"
-    DAILY = "daily"
-    WEEKLY = "weekly"
-    MONTHLY = "monthly"
-    QUARTERLY = "quarterly"
-    YEARLY = "yearly"
-
-
 class UrlStatus(str, enum.Enum):
     """URL status enumeration."""
 
@@ -65,14 +54,6 @@ class ScrapeUrl(Base, UUIDMixin, TimestampMixin):
         nullable=False,
         default=DataSourceType.SCRAPE,
     )
-
-    # Scheduling
-    schedule_frequency = Column(
-        Enum(ScheduleFrequency, name="schedule_frequency"),
-        nullable=False,
-        default=ScheduleFrequency.ON_DEMAND,
-    )
-    next_scheduled_run = Column(DateTime(timezone=True))
 
     # Rate Limiting
     delay_between_requests = Column(Integer, default=2)  # seconds

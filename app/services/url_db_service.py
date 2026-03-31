@@ -9,7 +9,6 @@ from sqlalchemy import select, func, or_
 from ..db_models.scrape_url import (
     ScrapeUrl,
     DataSourceType,
-    ScheduleFrequency,
     UrlStatus,
 )
 
@@ -28,7 +27,6 @@ class UrlDbService:
         state: Optional[str] = None,
         city: Optional[str] = None,
         data_source: DataSourceType = DataSourceType.SCRAPE,
-        schedule_frequency: ScheduleFrequency = ScheduleFrequency.ON_DEMAND,
         name: Optional[str] = None,
         description: Optional[str] = None,
         delay_between_requests: int = 2,
@@ -44,7 +42,6 @@ class UrlDbService:
             state: State code (required for state/local)
             city: City name (required for local)
             data_source: scrape or file
-            schedule_frequency: How often to scrape
             name: Optional display name
             description: Optional description
             delay_between_requests: Seconds between requests
@@ -63,7 +60,6 @@ class UrlDbService:
             city=city,
             jurisdiction=jurisdiction.lower(),
             data_source=data_source,
-            schedule_frequency=schedule_frequency,
             delay_between_requests=delay_between_requests,
             max_requests_per_minute=max_requests_per_minute,
             max_files_per_session=max_files_per_session,
@@ -170,7 +166,6 @@ class UrlDbService:
             "state": "state",
             "city": "city",
             "data_source": "data_source",
-            "schedule_frequency": "schedule_frequency",
             "status": "status",
             "delay_between_requests": "delay_between_requests",
             "max_requests_per_minute": "max_requests_per_minute",
@@ -264,21 +259,6 @@ class UrlDbService:
 
         return True
 
-    async def get_urls_for_scheduling(
-        self, frequency: Optional[ScheduleFrequency] = None
-    ) -> List[ScrapeUrl]:
-        """Get URLs that need to be scheduled for scraping."""
-        stmt = select(ScrapeUrl).where(
-            ScrapeUrl.status == UrlStatus.ACTIVE,
-            ScrapeUrl.schedule_frequency != ScheduleFrequency.ON_DEMAND,
-        )
-
-        if frequency:
-            stmt = stmt.where(ScrapeUrl.schedule_frequency == frequency)
-
-        result = await self.db.execute(stmt)
-        return result.scalars().all()
-
     def to_dict(self, scrape_url: ScrapeUrl) -> dict:
         """Convert ScrapeUrl to dictionary for API response."""
         return {
@@ -293,9 +273,6 @@ class UrlDbService:
             "data_source": scrape_url.data_source.value
             if scrape_url.data_source
             else "scrape",
-            "schedule_frequency": scrape_url.schedule_frequency.value
-            if scrape_url.schedule_frequency
-            else "on_demand",
             "status": scrape_url.status.value if scrape_url.status else "active",
             "error_message": scrape_url.error_message,
             "documents_count": scrape_url.documents_count or 0,

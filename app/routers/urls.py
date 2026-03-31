@@ -16,14 +16,12 @@ from ..db_models.scrape_job import JobStatus
 from ..worker.tasks import process_scrape
 from ..db_models.scrape_url import (
     DataSourceType as DbDataSourceType,
-    ScheduleFrequency as DbScheduleFrequency,
     UrlStatus as DbUrlStatus,
 )
 
 # Import Pydantic models from models directory
 from ..models.urls import (
     DataSource,
-    ScheduleFrequency,
     URLStatus,
     URLBase,
     URLCreate,
@@ -46,19 +44,6 @@ def _map_data_source(api_value: DataSource) -> DbDataSourceType:
         DataSource.FILE: DbDataSourceType.FILE,
     }
     return mapping.get(api_value, DbDataSourceType.SCRAPE)
-
-
-def _map_schedule_frequency(api_value: ScheduleFrequency) -> DbScheduleFrequency:
-    """Map API schedule frequency to DB enum."""
-    mapping = {
-        ScheduleFrequency.ON_DEMAND: DbScheduleFrequency.ON_DEMAND,
-        ScheduleFrequency.DAILY: DbScheduleFrequency.DAILY,
-        ScheduleFrequency.WEEKLY: DbScheduleFrequency.WEEKLY,
-        ScheduleFrequency.MONTHLY: DbScheduleFrequency.MONTHLY,
-        ScheduleFrequency.QUARTERLY: DbScheduleFrequency.QUARTERLY,
-        ScheduleFrequency.YEARLY: DbScheduleFrequency.YEARLY,
-    }
-    return mapping.get(api_value, DbScheduleFrequency.ON_DEMAND)
 
 
 def _map_url_status(api_value: URLStatus) -> DbUrlStatus:
@@ -186,7 +171,6 @@ async def create_url(
             state=url_data.state,
             city=url_data.city,
             data_source=_map_data_source(url_data.data_source),
-            schedule_frequency=_map_schedule_frequency(url_data.schedule_frequency),
             delay_between_requests=url_data.delay_between_requests,
             max_requests_per_minute=url_data.max_requests_per_minute,
             max_files_per_session=url_data.max_files_per_session,
@@ -243,8 +227,6 @@ async def update_url(
             if value is not None:
                 if key == "data_source":
                     update_kwargs["data_source"] = _map_data_source(value)
-                elif key == "schedule_frequency":
-                    update_kwargs["schedule_frequency"] = _map_schedule_frequency(value)
                 elif key == "status":
                     update_kwargs["status"] = _map_url_status(value)
                 else:

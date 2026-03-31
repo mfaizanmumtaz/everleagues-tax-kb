@@ -16,17 +16,6 @@ class DataSource(str, Enum):
     FILE = "file"
 
 
-class ScheduleFrequency(str, Enum):
-    """Scraping schedule frequency."""
-
-    ON_DEMAND = "on_demand"
-    DAILY = "daily"
-    WEEKLY = "weekly"
-    MONTHLY = "monthly"
-    QUARTERLY = "quarterly"
-    YEARLY = "yearly"
-
-
 class URLStatus(str, Enum):
     """URL status."""
 
@@ -52,9 +41,6 @@ class URLBase(BaseModel):
     city: Optional[str] = Field(default=None, description="City name if local-level")
     data_source: DataSource = Field(
         default=DataSource.SCRAPE, description="Data source type"
-    )
-    schedule_frequency: ScheduleFrequency = Field(
-        default=ScheduleFrequency.ON_DEMAND, description="Scraping schedule"
     )
 
 
@@ -83,7 +69,6 @@ class URLUpdate(BaseModel):
     state: Optional[str] = None
     city: Optional[str] = None
     data_source: Optional[DataSource] = None
-    schedule_frequency: Optional[ScheduleFrequency] = None
     status: Optional[URLStatus] = None
     delay_between_requests: Optional[int] = None
     max_requests_per_minute: Optional[int] = None
@@ -100,7 +85,6 @@ class URLResponse(BaseModel):
     state: Optional[str] = None
     city: Optional[str] = None
     data_source: str = "scrape"
-    schedule_frequency: str = "on_demand"
     status: str = "active"
     last_scraped: Optional[datetime] = None
     documents_count: int = 0
