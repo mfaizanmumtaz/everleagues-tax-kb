@@ -216,6 +216,34 @@ class DocumentRegistryService:
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_by_solr_id_with_blob(
+        self, solr_document_id: str
+    ) -> Optional[DocumentRegistry]:
+        """Get registry entry by Solr document ID with eagerly loaded blob records."""
+        stmt = (
+            select(DocumentRegistry)
+            .where(DocumentRegistry.solr_document_id == solr_document_id)
+            .options(selectinload(DocumentRegistry.blobs))
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def reset_for_reprocess(
+        self, registry_id: UUID
+    ) -> Optional[DocumentRegistry]:
+        """Reset a document's processing status for reprocessing."""
+        registry = await self.get_by_id(registry_id)
+        if not registry:
+            return None
+
+        registry.processing_status = ProcessingStatus.QUEUED
+        registry.processing_error = None
+        registry.processed_at = None
+
+        await self.db.commit()
+        await self.db.refresh(registry)
+        return registry
+
     async def get_by_content_hash(self, content_hash: str) -> Optional[DocumentRegistry]:
         """Find registry by blob content hash for duplicate detection."""
         stmt = (

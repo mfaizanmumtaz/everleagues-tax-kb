@@ -186,3 +186,33 @@ class DocumentListResponse(BaseModel):
     pages: int
     has_next: bool
     has_prev: bool
+
+
+class ReprocessRequest(BaseModel):
+    """Request model for reprocessing a document."""
+
+    force: bool = Field(
+        default=False,
+        description="Force reprocess even if document is not in failed state",
+    )
+
+
+class ReprocessResponse(BaseModel):
+    """Response model for single document reprocess."""
+
+    registry_id: str = Field(description="Registry ID of the document")
+    status: str = Field(
+        description="Status: queued, already_processing, not_found, no_blob_found"
+    )
+    message: str = Field(description="Human-readable message")
+
+
+class BulkReprocessResponse(BaseModel):
+    """Response model for bulk reprocess of failed documents."""
+
+    queued_count: int = Field(description="Number of documents queued for reprocessing")
+    skipped_count: int = Field(description="Number of documents skipped")
+    failed_ids: List[str] = Field(
+        default_factory=list, description="Document IDs that failed to queue"
+    )
+    message: str = Field(description="Human-readable summary")

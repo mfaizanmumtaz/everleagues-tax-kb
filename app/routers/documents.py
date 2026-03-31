@@ -1,5 +1,6 @@
 """Document API routes."""
 
+import logging
 from fastapi import APIRouter, HTTPException, Query, Path, Depends
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,12 +10,19 @@ from ..models.document import (
     DocumentResponse,
     DocumentListResponse,
     GovernanceStateUpdate,
+    ReprocessRequest,
+    ReprocessResponse,
+    BulkReprocessResponse,
 )
 from ..models.common import FilterParams, GovernanceState
 from ..services.document_service import get_document_service
 from ..services.document_registry_service import DocumentRegistryService
 from ..services.audit_log_service import AuditLogService
 from ..database.connection import get_db
+from ..worker.tasks import process_document
+from ..db_models.document_registry import ProcessingStatus
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
 
@@ -282,4 +290,230 @@ async def update_governance_state(
     except HTTPException:
         raise
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{document_id}/reprocess", response_model=ReprocessResponse)
+async def reprocess_document(
+    document_id: str = Path(..., description="Document ID (Solr ID)"),
+    request: ReprocessRequest = ReprocessRequest(),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Reprocess a failed document.
+
+    Re-queues the document for processing through the ingestion pipeline.
+    The document must have a failed status (sync_failed or index_failed)
+    unless force=true is specified.
+    """
+    try:
+        doc_service = get_document_service()
+        registry_service = DocumentRegistryService(db)
+
+        # Get the Solr document to check status
+        doc = await doc_service.get_document(document_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        # Check if document is in failed state (unless force=true)
+        is_failed = (
+            doc.sync_status.value == "sync_failed"
+            or doc.index_status.value == "index_failed"
+        )
+        if not is_failed and not request.force:
+            return ReprocessResponse(
+                registry_id="",
+                status="not_failed",
+                message="Document is not in failed state. Use force=true to reprocess anyway.",
+            )
+
+        # Get registry entry with blob
+        registry = await registry_service.get_by_solr_id_with_blob(document_id)
+        if not registry:
+            return ReprocessResponse(
+                registry_id="",
+                status="not_found",
+                message="Document registry entry not found. Cannot reprocess.",
+            )
+
+        # Check if already processing
+        if registry.processing_status == ProcessingStatus.PROCESSING:
+            return ReprocessResponse(
+                registry_id=str(registry.id),
+                status="already_processing",
+                message="Document is already being processed.",
+            )
+
+        # Check for raw blob
+        raw_blob = None
+        for blob in registry.blobs:
+            if blob.blob_type == "raw" and blob.is_current:
+                raw_blob = blob
+                break
+
+        if not raw_blob:
+            return ReprocessResponse(
+                registry_id=str(registry.id),
+                status="no_blob_found",
+                message="No raw file blob found. Cannot reprocess without source file.",
+            )
+
+        # Delete existing Solr document and chunks before reprocessing
+        await doc_service.delete_document(document_id)
+
+        # Clear the solr_document_id since we deleted the Solr doc
+        registry.solr_document_id = None
+        await db.commit()
+
+        # Reset registry status and queue for reprocessing
+        await registry_service.reset_for_reprocess(registry.id)
+
+        # Build metadata from registry for reprocessing
+        metadata = {
+            "title": registry.title,
+            "jurisdiction": registry.jurisdiction,
+            "state": registry.state,
+            "city": registry.city,
+            "tax_year": registry.tax_year,
+            "doc_type": registry.doc_type,
+        }
+
+        # Determine source type
+        source = registry.source_type.value if registry.source_type else "upload"
+
+        # Queue the Celery task
+        process_document.delay(
+            registry_id=str(registry.id),
+            metadata=metadata,
+            source=source,
+            is_replacement=False,
+        )
+
+        logger.info(f"Document reprocess queued: document_id={document_id}, registry_id={registry.id}")
+
+        # Update Solr status to show reprocessing (will be overwritten by worker)
+        # This provides immediate UI feedback
+
+        return ReprocessResponse(
+            registry_id=str(registry.id),
+            status="queued",
+            message="Document queued for reprocessing.",
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Failed to reprocess document: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/reprocess-failed", response_model=BulkReprocessResponse)
+async def reprocess_all_failed(
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Reprocess all failed documents.
+
+    Finds all documents with sync_failed or index_failed status
+    and queues them for reprocessing.
+    """
+    try:
+        doc_service = get_document_service()
+        registry_service = DocumentRegistryService(db)
+
+        # Query Solr for failed documents
+        failed_docs, total = await doc_service.list_documents(
+            query="syncStatus:sync_failed OR indexStatus:index_failed",
+            page=1,
+            limit=1000,  # Process up to 1000 at a time
+        )
+
+        if not failed_docs:
+            return BulkReprocessResponse(
+                queued_count=0,
+                skipped_count=0,
+                failed_ids=[],
+                message="No failed documents found.",
+            )
+
+        queued_count = 0
+        skipped_count = 0
+        failed_ids = []
+
+        for doc in failed_docs:
+            try:
+                # Get registry entry with blob
+                registry = await registry_service.get_by_solr_id_with_blob(doc.id)
+                if not registry:
+                    skipped_count += 1
+                    failed_ids.append(doc.id)
+                    continue
+
+                # Skip if already processing
+                if registry.processing_status == ProcessingStatus.PROCESSING:
+                    skipped_count += 1
+                    continue
+
+                # Check for raw blob
+                raw_blob = None
+                for blob in registry.blobs:
+                    if blob.blob_type == "raw" and blob.is_current:
+                        raw_blob = blob
+                        break
+
+                if not raw_blob:
+                    skipped_count += 1
+                    failed_ids.append(doc.id)
+                    continue
+
+                # Delete existing Solr document and chunks
+                await doc_service.delete_document(doc.id)
+
+                # Clear the solr_document_id
+                registry.solr_document_id = None
+                await db.commit()
+
+                # Reset registry status
+                await registry_service.reset_for_reprocess(registry.id)
+
+                # Build metadata
+                metadata = {
+                    "title": registry.title,
+                    "jurisdiction": registry.jurisdiction,
+                    "state": registry.state,
+                    "city": registry.city,
+                    "tax_year": registry.tax_year,
+                    "doc_type": registry.doc_type,
+                }
+
+                source = registry.source_type.value if registry.source_type else "upload"
+
+                # Queue the Celery task
+                process_document.delay(
+                    registry_id=str(registry.id),
+                    metadata=metadata,
+                    source=source,
+                    is_replacement=False,
+                )
+
+                queued_count += 1
+
+            except Exception as e:
+                logger.warning(f"Failed to queue reprocess for document {doc.id}: {e}")
+                skipped_count += 1
+                failed_ids.append(doc.id)
+
+        logger.info(
+            f"Bulk reprocess completed: queued={queued_count}, skipped={skipped_count}"
+        )
+
+        return BulkReprocessResponse(
+            queued_count=queued_count,
+            skipped_count=skipped_count,
+            failed_ids=failed_ids,
+            message=f"{queued_count} document(s) queued for reprocessing.",
+        )
+
+    except Exception as e:
+        logger.exception(f"Failed to bulk reprocess documents: {e}")
         raise HTTPException(status_code=500, detail=str(e))
